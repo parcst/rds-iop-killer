@@ -5,6 +5,40 @@ import { IopsChart } from './IopsChart';
 import { TimeRangePicker } from './TimeRangePicker';
 import type { IopsTab } from '../api/types';
 
+function Th({ children, tip, className = '' }: { children: React.ReactNode; tip: string; className?: string }) {
+  const [show, setShow] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const thRef = useRef<HTMLTableCellElement>(null);
+
+  const handleEnter = () => {
+    setShow(true);
+    if (thRef.current) {
+      const rect = thRef.current.getBoundingClientRect();
+      setPos({ top: rect.bottom + 6, left: rect.left + rect.width / 2 });
+    }
+  };
+
+  return (
+    <th
+      ref={thRef}
+      className={`px-4 py-2 font-medium cursor-help ${className}`}
+      onMouseEnter={handleEnter}
+      onMouseLeave={() => setShow(false)}
+    >
+      {children}
+      {show && pos && (
+        <div
+          className="fixed z-[9999] w-64 px-3 py-2 rounded bg-gray-700 text-gray-100 text-[11px] leading-relaxed font-normal normal-case tracking-normal shadow-lg pointer-events-none"
+          style={{ top: pos.top, left: pos.left, transform: 'translateX(-50%)' }}
+        >
+          <div className="absolute bottom-full left-1/2 -translate-x-1/2 border-4 border-transparent border-b-gray-700" />
+          {tip}
+        </div>
+      )}
+    </th>
+  );
+}
+
 function formatNumber(n: number): string {
   if (n >= 1_000_000_000) return (n / 1_000_000_000).toFixed(1) + 'B';
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
@@ -209,19 +243,19 @@ function StatementsTable({ highlightedStmt }: { highlightedStmt: number | null }
       <table className="w-full text-xs">
         <thead>
           <tr className="text-left text-gray-500 uppercase tracking-wider border-b border-gray-800">
-            <th className="px-4 py-2 font-medium">#</th>
-            <th className="px-4 py-2 font-medium text-right" title="Percentage of total I/O in this time window">Impact</th>
-            <th className="px-4 py-2 font-medium">Database</th>
-            <th className="px-4 py-2 font-medium">Query <span className="text-gray-600 normal-case tracking-normal font-normal">(click to copy)</span></th>
-            <th className="px-4 py-2 font-medium text-right">Total Rows Examined</th>
-            <th className="px-4 py-2 font-medium text-right">Avg Rows/Exec</th>
-            <th className="px-4 py-2 font-medium text-right">Executions</th>
-            <th className="px-4 py-2 font-medium text-right">Total Time</th>
-            <th className="px-4 py-2 font-medium text-right">Avg Time</th>
-            <th className="px-4 py-2 font-medium text-right">No Index</th>
-            <th className="px-4 py-2 font-medium text-right" title="Temp tables written to disk — high disk I/O">Tmp Disk</th>
-            <th className="px-4 py-2 font-medium text-right" title="Sort merge passes — spills to disk">Sort Spill</th>
-            <th className="px-4 py-2 font-medium text-right">Last Seen</th>
+            <Th tip="Rank by total I/O impact — #1 is the biggest contributor to IOPS consumption">#</Th>
+            <Th tip="Percentage of total rows examined in this time window — shows how much of the IOPS breach this single query is responsible for" className="text-right">Impact</Th>
+            <Th tip="The schema/database this query runs against">Database</Th>
+            <Th tip="Normalized query pattern (digest) — click to copy the full query text for analysis">Query <span className="text-gray-600 normal-case tracking-normal font-normal">(click to copy)</span></Th>
+            <Th tip="Total rows scanned by this query during the time window — each row examined translates to disk reads (IOPS) when data isn't cached in the buffer pool" className="text-right">Total Rows Examined</Th>
+            <Th tip="Average rows scanned per execution — high values (>500) suggest missing or inefficient indexes causing full table scans that spike IOPS" className="text-right">Avg Rows/Exec</Th>
+            <Th tip="Number of times this query ran during the window — a moderate query executed thousands of times can consume more IOPS than a single heavy query" className="text-right">Executions</Th>
+            <Th tip="Cumulative wall-clock time spent executing this query — long-running queries hold I/O resources and sustain IOPS pressure" className="text-right">Total Time</Th>
+            <Th tip="Average execution time per call — slow queries often indicate disk waits from high IOPS consumption" className="text-right">Avg Time</Th>
+            <Th tip="Executions where MySQL used no index at all — these force full table scans, reading every row from disk and directly spiking IOPS" className="text-right">No Index</Th>
+            <Th tip="Temporary tables written to disk instead of memory — happens when results exceed tmp_table_size, causing additional disk writes that increase IOPS" className="text-right">Tmp Disk</Th>
+            <Th tip="Sort operations that spilled to disk — occurs when sort_buffer_size is exceeded, generating extra disk I/O that adds to IOPS" className="text-right">Sort Spill</Th>
+            <Th tip="Most recent time this query was observed — helps identify if it's still actively contributing to IOPS" className="text-right">Last Seen</Th>
           </tr>
         </thead>
         <tbody>
@@ -290,17 +324,17 @@ function ConsumersTable() {
       <table className="w-full text-xs">
         <thead>
           <tr className="text-left text-gray-500 uppercase tracking-wider border-b border-gray-800">
-            <th className="px-4 py-2 font-medium">#</th>
-            <th className="px-4 py-2 font-medium text-right" title="Percentage of total effective IOPS">Impact</th>
-            <th className="px-4 py-2 font-medium">Database</th>
-            <th className="px-4 py-2 font-medium">Query <span className="text-gray-600 normal-case tracking-normal font-normal">(click to copy)</span></th>
-            <th className="px-4 py-2 font-medium text-right">Effective IOPS</th>
-            <th className="px-4 py-2 font-medium text-right">Concurrent</th>
-            <th className="px-4 py-2 font-medium text-right">Avg Rows/Exec</th>
-            <th className="px-4 py-2 font-medium text-right">Total Rows Examined</th>
-            <th className="px-4 py-2 font-medium text-right">Executions</th>
-            <th className="px-4 py-2 font-medium text-right">Avg Time</th>
-            <th className="px-4 py-2 font-medium text-right">Last Seen</th>
+            <Th tip="Rank by effective IOPS impact — #1 is the biggest contributor when factoring in concurrency">#</Th>
+            <Th tip="Percentage of total effective IOPS — shows how much of the combined I/O pressure this query is responsible for" className="text-right">Impact</Th>
+            <Th tip="The schema/database this query runs against">Database</Th>
+            <Th tip="Normalized query pattern (digest) — click to copy the full query text for analysis">Query <span className="text-gray-600 normal-case tracking-normal font-normal">(click to copy)</span></Th>
+            <Th tip="Rows examined multiplied by concurrent connections — represents the amplified IOPS load when multiple sessions run the same expensive query simultaneously" className="text-right">Effective IOPS</Th>
+            <Th tip="Number of connections running this query at the same time — concurrent execution multiplies IOPS impact since each session does independent disk reads" className="text-right">Concurrent</Th>
+            <Th tip="Average rows scanned per execution — high values suggest missing indexes causing full scans that spike IOPS" className="text-right">Avg Rows/Exec</Th>
+            <Th tip="Total rows scanned across all executions — each row examined can translate to disk reads when data isn't in the buffer pool" className="text-right">Total Rows Examined</Th>
+            <Th tip="Number of times this query ran — frequent execution amplifies IOPS even for moderately expensive queries" className="text-right">Executions</Th>
+            <Th tip="Average execution time per call — slow queries sustain I/O pressure longer and hold buffer pool resources" className="text-right">Avg Time</Th>
+            <Th tip="Most recent time this query was observed — helps identify if it's still actively contributing to IOPS" className="text-right">Last Seen</Th>
           </tr>
         </thead>
         <tbody>
