@@ -1,0 +1,16 @@
+{
+  "name": "rds-iop-killer",
+  "private": true,
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "prepare": "git config core.hooksPath .githooks",
+    "dev": "concurrently \"npm run dev -w server\" \"npm run dev -w client\"",
+    "build": "npm run build -w server && npm run build -w client"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

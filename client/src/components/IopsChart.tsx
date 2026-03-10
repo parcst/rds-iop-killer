@@ -1,0 +1,299 @@
+import { useRef, useState, useCallback } from 'react';
+import { useAppStore } from '../store/app-store';
+
+const PADDING = { top: 20, right: 20, bottom: 32, left: 60 };
+
+function formatNumber(n: number): string {
+  if (n >= 1_000_000_000) return (n / 1_000_000_000).toFixed(1) + 'B';
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
+  return String(Math.round(n));
+}
+
+function formatTimeLabel(iso: string, rangeMins: number, utc: boolean): string {
+  const d = new Date(iso);
+  const opts: Intl.DateTimeFormatOptions = { hour12: false, ...(utc ? { timeZone: 'UTC' } : {}) };
+  if (rangeMins <= 60) return d.toLocaleTimeString([], { ...opts, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  if (rangeMins <= 1440) return d.toLocaleTimeString([], { ...opts, hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleDateString([], { ...opts, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+export function IopsChart() {
+  const cloudwatchData = useAppStore((s) => s.cloudwatchData);
+  const timeRange = useAppStore((s) => s.timeRange);
+  const setTimeRange = useAppStore((s) => s.setTimeRange);
+  const iopsLoading = useAppStore((s) => s.iopsLoading);
+  const showUtc = useAppStore((s) => s.showUtc);
+  const iopsThreshold = useAppStore((s) => s.iopsThreshold);
+
+
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [dragStart, setDragStart] = useState<number | null>(null);
+  const [dragEnd, setDragEnd] = useState<number | null>(null);
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+
+  const width = 900;
+  const height = 200;
+  const chartW = width - PADDING.left - PADDING.right;
+  const chartH = height - PADDING.top - PADDING.bottom;
+
+  const rangeMins = (new Date(timeRange.until).getTime() - new Date(timeRange.since).getTime()) / 60000;
+
+  const data = cloudwatchData;
+
+  // Y axis — ensure threshold line is always visible
+  const dataMax = Math.max(...data.map(p => p.totalIops), 1);
+  const yMax = Math.max(dataMax, iopsThreshold > 0 ? iopsThreshold * 1.2 : 0) * 1.1;
+
+  const xScale = (i: number) => PADDING.left + (i / Math.max(data.length - 1, 1)) * chartW;
+  const yScale = (v: number) => PADDING.top + chartH - (v / yMax) * chartH;
+
+  // Build SVG paths
+  const totalPath = data.map((p, i) => `${i === 0 ? 'M' : 'L'}${xScale(i).toFixed(1)},${yScale(p.totalIops).toFixed(1)}`).join(' ');
+  const totalArea = totalPath + ` L${xScale(data.length - 1).toFixed(1)},${yScale(0).toFixed(1)} L${xScale(0).toFixed(1)},${yScale(0).toFixed(1)} Z`;
+  const readPath = data.map((p, i) => `${i === 0 ? 'M' : 'L'}${xScale(i).toFixed(1)},${yScale(p.readIops).toFixed(1)}`).join(' ');
+  const writePath = data.map((p, i) => `${i === 0 ? 'M' : 'L'}${xScale(i).toFixed(1)},${yScale(p.writeIops).toFixed(1)}`).join(' ');
+
+  // Ticks
+  const yTicks = [0, yMax * 0.25, yMax * 0.5, yMax * 0.75, yMax];
+  const tickCount = 13;
+  const xTicks = Array.from({ length: tickCount }, (_, i) =>
+    Math.round((i / (tickCount - 1)) * (data.length - 1))
+  ).filter((v, i, arr) => v >= 0 && v < data.length && arr.indexOf(v) === i);
+
+  // Drag-to-zoom
+  const getXIndex = useCallback((clientX: number) => {
+    if (!svgRef.current) return 0;
+    const rect = svgRef.current.getBoundingClientRect();
+    const scale = width / rect.width;
+    const viewBoxX = (clientX - rect.left) * scale;
+    const x = viewBoxX - PADDING.left;
+    const pct = Math.max(0, Math.min(1, x / chartW));
+    return Math.round(pct * (data.length - 1));
+  }, [data.length, chartW]);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    const idx = getXIndex(e.clientX);
+    setDragStart(idx);
+    setDragEnd(idx);
+  }, [getXIndex]);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    const idx = getXIndex(e.clientX);
+    setHoveredIdx(idx);
+    if (dragStart !== null) setDragEnd(idx);
+  }, [dragStart, getXIndex]);
+
+  const handleMouseUp = useCallback(() => {
+    if (dragStart !== null && dragEnd !== null && Math.abs(dragEnd - dragStart) >= 2) {
+      const minIdx = Math.min(dragStart, dragEnd);
+      const maxIdx = Math.max(dragStart, dragEnd);
+      if (data[minIdx] && data[maxIdx]) {
+        setTimeRange({
+          since: data[minIdx].timestamp,
+          until: data[maxIdx].timestamp,
+          label: 'Custom',
+        });
+      }
+    }
+    setDragStart(null);
+    setDragEnd(null);
+  }, [dragStart, dragEnd, data, setTimeRange]);
+
+  const handleMouseLeave = useCallback(() => {
+    setHoveredIdx(null);
+    if (dragStart !== null) {
+      setDragStart(null);
+      setDragEnd(null);
+    }
+  }, [dragStart]);
+
+  // Empty state (no data and not loading)
+  if (data.length === 0 && !iopsLoading) {
+    return (
+      <div className="flex items-center justify-center h-[200px] text-gray-600 text-xs">
+        No CloudWatch data — ensure AWS SSO is active
+      </div>
+    );
+  }
+
+  // Pure loading state (no data yet)
+  if (data.length === 0 && iopsLoading) {
+    return (
+      <div className="flex items-center justify-center h-[200px] text-gray-400 text-xs gap-2">
+        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
+        <span>Loading CloudWatch IOPS...</span>
+      </div>
+    );
+  }
+
+  const selX1 = dragStart !== null && dragEnd !== null ? xScale(Math.min(dragStart, dragEnd)) : null;
+  const selX2 = dragStart !== null && dragEnd !== null ? xScale(Math.max(dragStart, dragEnd)) : null;
+  const hoveredPoint = hoveredIdx !== null && data[hoveredIdx] ? data[hoveredIdx] : null;
+  const breachCount = iopsThreshold > 0 ? data.filter(p => p.totalIops > iopsThreshold).length : 0;
+  const peak = Math.max(...data.map(p => p.totalIops));
+
+  return (
+    <div className="relative">
+      {/* Loading overlay — shows on top of stale chart */}
+      {iopsLoading && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-gray-900/60 rounded">
+          <div className="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded px-3 py-1.5">
+            <svg className="animate-spin h-4 w-4 text-blue-400" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            <span className="text-xs text-gray-300">Fetching CloudWatch IOPS...</span>
+          </div>
+        </div>
+      )}
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${width} ${height}`}
+        className="w-full select-none cursor-crosshair"
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseLeave}
+      >
+        {/* Y-axis label */}
+        <text x={4} y={PADDING.top + chartH / 2} textAnchor="middle" fill="#6b7280" fontSize={8} transform={`rotate(-90, 4, ${PADDING.top + chartH / 2})`}>
+          IOPS
+        </text>
+
+        {/* Grid lines */}
+        {yTicks.map((v, i) => (
+          <g key={i}>
+            <line x1={PADDING.left} y1={yScale(v)} x2={width - PADDING.right} y2={yScale(v)} stroke="#1f2937" strokeWidth={1} />
+            <text x={PADDING.left - 8} y={yScale(v) + 3} textAnchor="end" fill="#6b7280" fontSize={9}>
+              {formatNumber(v)}
+            </text>
+          </g>
+        ))}
+
+        {/* X axis labels */}
+        {xTicks.map((i) => (
+          data[i] && (
+            <text key={i} x={xScale(i)} y={height - 4} textAnchor="middle" fill="#6b7280" fontSize={7}>
+              {formatTimeLabel(data[i].timestamp, rangeMins, showUtc)}
+            </text>
+          )
+        ))}
+
+        {/* Breach zone — red fill above threshold */}
+        {iopsThreshold > 0 && (
+          <>
+            <defs>
+              <clipPath id="breach-clip">
+                <rect x={PADDING.left} y={PADDING.top} width={chartW} height={Math.max(yScale(iopsThreshold) - PADDING.top, 0)} />
+              </clipPath>
+            </defs>
+            <path d={totalArea} fill="rgba(239, 68, 68, 0.35)" clipPath="url(#breach-clip)" />
+          </>
+        )}
+
+        {/* Total IOPS area fill */}
+        <path d={totalArea} fill="rgba(255, 255, 255, 0.04)" />
+
+        {/* Total IOPS line (white) */}
+        <path d={totalPath} fill="none" stroke="rgba(255, 255, 255, 0.7)" strokeWidth={1} />
+
+        {/* Provisioned IOPS threshold line */}
+        {iopsThreshold > 0 && (
+          <>
+            <line
+              x1={PADDING.left} y1={yScale(iopsThreshold)}
+              x2={width - PADDING.right} y2={yScale(iopsThreshold)}
+              stroke="#ef4444" strokeWidth={1.5} strokeDasharray="6 3" opacity={0.8}
+            />
+            <text
+              x={width - PADDING.right - 2} y={yScale(iopsThreshold) - 4}
+              textAnchor="end" fill="#ef4444" fontSize={8} fontWeight="bold" opacity={0.9}
+            >
+              PROVISIONED IOPS ({formatNumber(iopsThreshold)})
+            </text>
+          </>
+        )}
+
+        {/* ReadIOPS line (blue — matches CloudWatch) */}
+        <path d={readPath} fill="none" stroke="#3b82f6" strokeWidth={1.5} />
+
+        {/* WriteIOPS line (orange — matches CloudWatch) */}
+        <path d={writePath} fill="none" stroke="#f59e0b" strokeWidth={1.5} />
+
+        {/* Drag selection overlay */}
+        {selX1 !== null && selX2 !== null && (
+          <rect
+            x={selX1} y={PADDING.top} width={selX2 - selX1} height={chartH}
+            fill="rgba(59, 130, 246, 0.15)" stroke="#3b82f6" strokeWidth={1} strokeDasharray="3 2"
+          />
+        )}
+
+        {/* Hover crosshair */}
+        {hoveredIdx !== null && dragStart === null && (
+          <line
+            x1={xScale(hoveredIdx)} y1={PADDING.top}
+            x2={xScale(hoveredIdx)} y2={PADDING.top + chartH}
+            stroke="#4b5563" strokeWidth={1} strokeDasharray="2 2"
+          />
+        )}
+      </svg>
+
+      {/* Legend + threshold config */}
+      <div className="flex items-center gap-4 px-4 mt-1">
+        <div className="flex items-center gap-1.5">
+          <div className="w-3 h-0.5 bg-blue-500 rounded" />
+          <span className="text-[10px] text-gray-500">ReadIOPS</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <div className="w-3 h-0.5 bg-amber-500 rounded" />
+          <span className="text-[10px] text-gray-500">WriteIOPS</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <div className="w-3 h-0.5 bg-white/70 rounded" />
+          <span className="text-[10px] text-gray-500">Total</span>
+        </div>
+        {iopsThreshold > 0 && (
+          <div className="flex items-center gap-1.5">
+            <div className="w-3 h-0.5 rounded" style={{ borderTop: '1.5px dashed #ef4444' }} />
+            <span className="text-[10px] text-gray-500">Provisioned IOPS Limit</span>
+          </div>
+        )}
+
+        <span className="text-[10px] text-gray-600 ml-auto">Drag to zoom</span>
+      </div>
+
+      {/* Breach summary */}
+      {iopsThreshold > 0 && breachCount > 0 && (
+        <div className="flex items-center gap-2 px-4 mt-0.5 mb-1">
+          <span className="text-[10px] font-medium text-red-400">
+            BREACH — {breachCount} of {data.length} intervals exceed provisioned IOPS
+          </span>
+          <span className="text-[10px] text-gray-600">
+            Peak: {formatNumber(peak)}/s ({((peak / iopsThreshold) * 100).toFixed(0)}% of {formatNumber(iopsThreshold)} limit)
+          </span>
+        </div>
+      )}
+
+      {/* Hover tooltip */}
+      {hoveredPoint && dragStart === null && (
+        <div className={`absolute top-2 right-6 border rounded px-2 py-1.5 text-[10px] text-gray-300 space-y-0.5 pointer-events-none ${
+          iopsThreshold > 0 && hoveredPoint.totalIops > iopsThreshold
+            ? 'bg-red-950 border-red-700'
+            : 'bg-gray-800 border-gray-700'
+        }`}>
+          <div className="text-gray-500">{formatTimeLabel(hoveredPoint.timestamp, rangeMins, showUtc)}</div>
+          <div>Read: <span className="text-blue-400 font-medium">{formatNumber(hoveredPoint.readIops)}</span></div>
+          <div>Write: <span className="text-amber-400 font-medium">{formatNumber(hoveredPoint.writeIops)}</span></div>
+          <div>Total: <span className="text-white font-medium">{formatNumber(hoveredPoint.totalIops)}</span></div>
+          {iopsThreshold > 0 && hoveredPoint.totalIops > iopsThreshold && (
+            <div className="text-red-400 font-bold">BREACH ({((hoveredPoint.totalIops / iopsThreshold) * 100).toFixed(0)}% of limit)</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
