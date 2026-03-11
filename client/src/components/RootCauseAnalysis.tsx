@@ -197,11 +197,6 @@ interface RdsConfig {
   readReplicaIds: string[];
 }
 
-interface ParamGroup {
-  name: string;
-  parameters: Record<string, { value: string; source: string }>;
-}
-
 function buildHitList(
   statements: TopStatement[],
   consumers: TopConsumer[],
@@ -209,11 +204,10 @@ function buildHitList(
   rdsConfig: RdsConfig | null,
   timeRange: { since: string; until: string },
   innodbMetrics: InnodbMetrics | null,
-  parameterGroup: ParamGroup | null,
-): { executiveSummary: string; summary: RcaSegment[][]; items: HitListItem[]; cwInsights: CwInsights; paramTuning: { name: string; issues: string[]; currentValues: string[] } | null } {
+): { executiveSummary: string; summary: RcaSegment[][]; items: HitListItem[]; cwInsights: CwInsights } {
   const totalRows = statements.reduce((sum, s) => sum + s.totalRowsExamined, 0);
   const emptyCw: CwInsights = { avgQueueDepth: 0, maxQueueDepth: 0, avgReadLatency: 0, maxReadLatency: 0, avgWriteLatency: 0, maxWriteLatency: 0, avgCpu: 0, maxCpu: 0, avgMemMb: 0, minMemMb: 0, avgConns: 0, maxConns: 0, avgBurst: -1, minBurst: -1, avgReadIops: 0, avgWriteIops: 0, avgTotalIops: 0, maxTotalIops: 0, readIopsPct: 50, storageSaturated: false, memoryPressure: false, burstExhausted: false, cpuHot: false, connectionSurge: false };
-  if (totalRows === 0) return { executiveSummary: '', summary: [], items: [], cwInsights: emptyCw, paramTuning: null };
+  if (totalRows === 0) return { executiveSummary: '', summary: [], items: [], cwInsights: emptyCw };
 
   const consumerByDigest = new Map<string, TopConsumer>();
   for (const c of consumers) consumerByDigest.set(c.digest, c);
@@ -340,127 +334,6 @@ function buildHitList(
         summary.push([{ type: 'text', value: `gp3 IOPS nearing limit \u2014 avg ${Math.round(cwInsights.avgTotalIops)} vs ${baseline} provisioned. Consider increasing provisioned IOPS to ${Math.ceil(cwInsights.maxTotalIops * 1.3 / 100) * 100}.` }]);
       }
     }
-  }
-
-  // MySQL parameter group tuning analysis — built separately for dedicated UI section
-  let paramTuning: { name: string; issues: string[]; currentValues: string[] } | null = null;
-  if (parameterGroup) {
-    const p = parameterGroup.parameters;
-    const paramIssues: string[] = [];
-    const currentValues: string[] = [];
-
-    // innodb_buffer_pool_size — most impactful for IOPS
-    const bps = p['innodb_buffer_pool_size'];
-    if (bps) {
-      const bpBytes = parseInt(bps.value);
-      const bpGb = bpBytes / (1024 * 1024 * 1024);
-      if (cwInsights.avgMemMb > 0 && bpBytes > 0) {
-        const totalEstMb = cwInsights.avgMemMb + bpBytes / (1024 * 1024);
-        const bpPct = (bpBytes / (1024 * 1024)) / totalEstMb * 100;
-        currentValues.push(`buffer_pool_size: ${bpGb.toFixed(1)}GB (~${bpPct.toFixed(0)}% of memory)`);
-        if (bpPct < 60) {
-          paramIssues.push(`innodb_buffer_pool_size is ${bpGb.toFixed(1)}GB (~${bpPct.toFixed(0)}% of estimated instance memory) — increase to 70-80% for fewer disk reads`);
-        }
-      } else {
-        currentValues.push(`buffer_pool_size: ${bpGb.toFixed(1)}GB`);
-      }
-    }
-
-    // innodb_io_capacity
-    const ioc = p['innodb_io_capacity'];
-    const iocMax = p['innodb_io_capacity_max'];
-    if (ioc) {
-      const cap = parseInt(ioc.value);
-      const capMax = iocMax ? parseInt(iocMax.value) : 0;
-      currentValues.push(`io_capacity: ${cap}${capMax ? ` / max: ${capMax}` : ''}`);
-      if (rdsConfig && rdsConfig.provisionedIops > 0 && cap < rdsConfig.provisionedIops * 0.5) {
-        paramIssues.push(`innodb_io_capacity=${cap} is far below provisioned IOPS (${rdsConfig.provisionedIops}) — InnoDB background flushing is throttled. Set to ~${Math.round(rdsConfig.provisionedIops * 0.5)}-${rdsConfig.provisionedIops}`);
-      } else if (cap < 200 && cwInsights.avgTotalIops > 500) {
-        paramIssues.push(`innodb_io_capacity=${cap} is low for this workload (avg ${Math.round(cwInsights.avgTotalIops)} IOPS) — increase to allow faster background flushing`);
-      }
-      if (capMax > 0 && capMax <= cap) {
-        paramIssues.push(`innodb_io_capacity_max (${capMax}) ≤ innodb_io_capacity (${cap}) — max should be 2x capacity or higher`);
-      }
-    }
-
-    // innodb_flush_log_at_trx_commit
-    const fltc = p['innodb_flush_log_at_trx_commit'];
-    if (fltc) {
-      currentValues.push(`flush_log_at_trx_commit: ${fltc.value}`);
-      if (fltc.value === '1' && cwInsights.avgWriteIops > cwInsights.avgReadIops * 2) {
-        paramIssues.push(`innodb_flush_log_at_trx_commit=1 (full durability) with write-heavy workload — setting to 2 reduces write IOPS (flush once/sec instead of every commit)`);
-      }
-    }
-
-    // sync_binlog
-    const sb = p['sync_binlog'];
-    if (sb) {
-      currentValues.push(`sync_binlog: ${sb.value}`);
-      if (sb.value === '1' && cwInsights.avgWriteIops > 500) {
-        paramIssues.push(`sync_binlog=1 with high write IOPS — each commit forces a binlog sync. Setting to 0 or higher reduces write I/O`);
-      }
-    }
-
-    // tmp_table_size / max_heap_table_size
-    const hasTmpSpills = statements.some(s => s.tmpDiskTables > 0);
-    const tts = p['tmp_table_size'];
-    const mhts = p['max_heap_table_size'];
-    if (tts && mhts) {
-      const ttsVal = parseInt(tts.value);
-      const mhtsVal = parseInt(mhts.value);
-      const effectiveMb = Math.min(ttsVal, mhtsVal) / (1024 * 1024);
-      currentValues.push(`tmp_table: ${effectiveMb.toFixed(0)}MB`);
-      if (hasTmpSpills && effectiveMb < 64) {
-        paramIssues.push(`Temp table limit ${effectiveMb.toFixed(0)}MB — queries spilling to disk. Increase tmp_table_size + max_heap_table_size`);
-      }
-    }
-
-    // sort_buffer_size
-    const hasSortSpills = statements.some(s => s.sortMergePasses > 0);
-    const sbs = p['sort_buffer_size'];
-    if (sbs) {
-      const sbKb = parseInt(sbs.value) / 1024;
-      currentValues.push(`sort_buffer: ${sbKb >= 1024 ? (sbKb / 1024).toFixed(1) + 'MB' : sbKb.toFixed(0) + 'KB'}`);
-      if (hasSortSpills && sbKb < 4096) {
-        paramIssues.push(`sort_buffer_size=${sbKb.toFixed(0)}KB with sort spills — increase to 4-8MB`);
-      }
-    }
-
-    // IO threads
-    const rit = p['innodb_read_io_threads'];
-    const wit = p['innodb_write_io_threads'];
-    if (rit || wit) {
-      currentValues.push(`io_threads: read=${rit?.value || '?'} write=${wit?.value || '?'}`);
-      if (rit && parseInt(rit.value) < 4 && cwInsights.avgTotalIops > 1000) {
-        paramIssues.push(`innodb_read_io_threads=${rit.value} — increase to 8-16 for high-IOPS workloads`);
-      }
-      if (wit && parseInt(wit.value) < 4 && cwInsights.avgWriteIops > 500) {
-        paramIssues.push(`innodb_write_io_threads=${wit.value} — increase to 8-16 for write-heavy workloads`);
-      }
-    }
-
-    // innodb_lru_scan_depth
-    const lsd = p['innodb_lru_scan_depth'];
-    if (lsd) {
-      const lsdVal = parseInt(lsd.value);
-      if (lsdVal > 1024 && cwInsights.avgTotalIops > 500) {
-        paramIssues.push(`innodb_lru_scan_depth=${lsdVal} — reduce to 256-512 for lower background I/O`);
-      }
-    }
-
-    // innodb_adaptive_hash_index
-    const ahi = p['innodb_adaptive_hash_index'];
-    if (ahi && ahi.value === '0' && cwInsights.readIopsPct > 60) {
-      paramIssues.push(`innodb_adaptive_hash_index OFF — enable for read-heavy point-lookup workloads`);
-    }
-
-    // max_connections
-    const mc = p['max_connections'];
-    if (mc) {
-      currentValues.push(`max_connections: ${mc.value}`);
-    }
-
-    paramTuning = { name: parameterGroup.name, issues: paramIssues, currentValues };
   }
 
   // Read replica opportunity
@@ -820,7 +693,7 @@ function buildHitList(
 
   const executiveSummary = `${execSeverity}: IOPS driven by ${causeStr}${tblStr} (top ${topItems.length} queries = ${topPctSum.toFixed(0)}% of I/O). ${savingsStr > 0 ? `Fixing top offenders could eliminate ~${formatNumber(savingsStr)} row scans.` : ''}`;
 
-  return { executiveSummary, summary, items: items.slice(0, 10), cwInsights, paramTuning };
+  return { executiveSummary, summary, items: items.slice(0, 10), cwInsights };
 }
 
 const severityColors = {
@@ -842,7 +715,6 @@ export function RootCauseAnalysis() {
   const rdsConfig = useAppStore((s) => s.rdsConfig);
   const timeRange = useAppStore((s) => s.timeRange);
   const innodbMetrics = useAppStore((s) => s.innodbMetrics);
-  const parameterGroup = useAppStore((s) => s.parameterGroup);
   const isInvestigating = useAppStore((s) => s.timeRange.label === 'Custom');
   const setHighlightedStmt = useAppStore((s) => s.setHighlightedStmt);
   const [selectedItem, setSelectedItem] = useState<HitListItem | null>(null);
@@ -850,8 +722,8 @@ export function RootCauseAnalysis() {
 
   if (!isInvestigating || statements.length === 0) return null;
 
-  const { executiveSummary, summary, items, cwInsights: cw, paramTuning } = buildHitList(
-    statements, consumers, cloudwatchData, rdsConfig, timeRange, innodbMetrics, parameterGroup,
+  const { executiveSummary, summary, items, cwInsights: cw } = buildHitList(
+    statements, consumers, cloudwatchData, rdsConfig, timeRange, innodbMetrics,
   );
   if (summary.length === 0) return null;
 
@@ -936,38 +808,6 @@ export function RootCauseAnalysis() {
               </div>
             </div>
           ))}
-        </div>
-      )}
-
-      {/* Parameter Group Tuning */}
-      {paramTuning && (
-        <div className="space-y-1.5">
-          <div className="text-[10px] text-gray-500 uppercase tracking-wider font-medium pt-1 border-t border-gray-700">
-            Parameter Group: {paramTuning.name}
-          </div>
-          {/* Current values summary */}
-          <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-gray-500">
-            {paramTuning.currentValues.map((v, i) => (
-              <span key={i}>{v}</span>
-            ))}
-          </div>
-          {/* Tuning recommendations */}
-          {paramTuning.issues.length > 0 ? (
-            <div className="space-y-1">
-              {paramTuning.issues.map((issue, i) => (
-                <div key={i} className="rounded border border-orange-800/40 bg-orange-950/15 px-2.5 py-1.5 text-[10px] text-orange-200 leading-snug">
-                  {issue}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="text-[10px] text-green-400/70">No parameter tuning issues detected for this workload.</div>
-          )}
-        </div>
-      )}
-      {!paramTuning && parameterGroup === null && rdsConfig?.parameterGroupName && (
-        <div className="text-[10px] text-gray-500 pt-1 border-t border-gray-700">
-          Loading parameter group settings...
         </div>
       )}
 

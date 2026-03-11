@@ -2,6 +2,7 @@ import { useAppStore } from './store/app-store';
 import { TeleportControls } from './components/TeleportControls';
 import { IopsView } from './components/IopsView';
 import { RootCauseAnalysis } from './components/RootCauseAnalysis';
+import { ParameterGroupPanel } from './components/ParameterGroupPanel';
 
 export default function App() {
   const connectionResult = useAppStore((s) => s.connectionResult);
@@ -28,6 +29,7 @@ export default function App() {
               Connection
             </h2>
             <TeleportControls />
+            <ParameterGroupPanel />
             <RootCauseAnalysis />
           </div>
         </aside>
