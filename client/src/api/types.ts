@@ -81,30 +81,6 @@ export interface CloudWatchIopsPoint {
   burstBalance: number; // -1 = not available (io1/io2)
 }
 
-export interface DigestHistoryResult {
-  avgPerDay: {
-    totalRowsExamined: number;
-    totalExecutions: number;
-    avgRowsExamined: number;
-    totalTimeSec: number;
-    avgTimeSec: number;
-    p99Sec: number;
-    totalLockTimeSec: number;
-    totalCpuTimeSec: number;
-    noIndexUsed: number;
-    fullJoinCount: number;
-    tmpDiskTables: number;
-    sortMergePasses: number;
-  };
-  dailyPoints: {
-    date: string;
-    totalRowsExamined: number;
-    totalExecutions: number;
-    avgTimeSec: number;
-  }[];
-  daysWithData: number;
-}
-
 export type IopsTab = 'statements' | 'consumers';
 
 export interface TimeRange {

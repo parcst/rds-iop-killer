@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { getTopStatements, getTopConsumers, getDigestHistory } from '../services/iops.js';
+import { getTopStatements, getTopConsumers } from '../services/iops.js';
 
 const router = Router();
 
@@ -55,25 +55,6 @@ router.get('/cloudwatch', async (req: Request, res: Response) => {
     const profileName = await getAwsProfile(accountId, region);
     const data = await getCloudWatchIops(instanceId, region, profileName, since, until);
     res.json({ cloudwatch: data });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/**
- * GET /api/iops/digest-history?digest=X&database=Y
- * 7-day historical baseline for a specific query digest.
- */
-router.get('/digest-history', async (req: Request, res: Response) => {
-  try {
-    const digest = req.query.digest as string;
-    const database = req.query.database as string | undefined;
-    if (!digest) {
-      res.status(400).json({ error: 'digest is required' });
-      return;
-    }
-    const history = await getDigestHistory(digest, database);
-    res.json(history);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

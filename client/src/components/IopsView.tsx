@@ -3,7 +3,6 @@ import { useAppStore } from '../store/app-store';
 import { useIops } from '../hooks/useIops';
 import { IopsChart } from './IopsChart';
 import { TimeRangePicker } from './TimeRangePicker';
-import { HistoryModal } from './HistoryModal';
 import type { TopStatement, TopConsumer } from '../api/types';
 
 function Th({ children, tip, className = '' }: { children: React.ReactNode; tip: string; className?: string }) {
@@ -22,7 +21,7 @@ function Th({ children, tip, className = '' }: { children: React.ReactNode; tip:
   return (
     <th
       ref={thRef}
-      className={`px-4 py-2 font-medium cursor-help ${className}`}
+      className={`px-2 py-1.5 font-medium cursor-help ${className}`}
       onMouseEnter={handleEnter}
       onMouseLeave={() => setShow(false)}
     >
@@ -138,7 +137,7 @@ function splitTopLevelCommas(s: string): string[] {
   return parts;
 }
 
-function QueryCell({ text, sampleText, onHistory }: { text: string; sampleText?: string; onHistory?: () => void }) {
+function QueryCell({ text, sampleText }: { text: string; sampleText?: string }) {
   const [show, setShow] = useState(false);
   const [copied, setCopied] = useState(false);
   // Prefer sample text (real query with actual values) for copy
@@ -155,26 +154,12 @@ function QueryCell({ text, sampleText, onHistory }: { text: string; sampleText?:
 
   return (
     <td
-      className="px-4 py-2 text-gray-200 font-mono relative cursor-pointer max-w-[340px]"
+      className="px-2 py-1.5 text-gray-200 font-mono text-[11px] relative cursor-pointer"
       onMouseEnter={() => setShow(true)}
       onMouseLeave={() => { setShow(false); setCopied(false); }}
       onClick={handleClick}
     >
-      <div className="flex items-center gap-1.5">
-        {onHistory && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onHistory(); }}
-            className="shrink-0 text-blue-400 hover:text-blue-300 transition-colors"
-            title="Compare with 7-day history"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10" />
-              <polyline points="12 6 12 12 16 14" />
-            </svg>
-          </button>
-        )}
-        <span className="truncate">{truncateQuery(text, 80)}</span>
-      </div>
+      <div className="overflow-hidden text-ellipsis whitespace-nowrap">{truncateQuery(text, 40)}</div>
       {show && (
         <div className="absolute z-50 left-0 top-full mt-1 max-w-[600px] max-h-[400px] overflow-auto bg-gray-900 border border-gray-600 rounded-lg shadow-xl px-3 py-2 text-[11px] text-gray-200 font-mono whitespace-pre break-all">
           {copied && <div className="text-green-400 text-[10px] mb-1 font-sans">Copied to clipboard!</div>}
@@ -195,7 +180,7 @@ function QueryCell({ text, sampleText, onHistory }: { text: string; sampleText?:
 function ImpactCell({ pct }: { pct: number }) {
   const color = pct >= 20 ? 'text-red-400' : pct >= 10 ? 'text-orange-400' : pct >= 5 ? 'text-amber-400' : 'text-gray-500';
   return (
-    <td className={`px-4 py-2 text-right text-xs font-medium ${color}`}>
+    <td className={`px-2 py-1.5 text-right text-xs font-medium ${color}`}>
       {pct.toFixed(1)}%
     </td>
   );
@@ -231,33 +216,12 @@ function useResizable(initial: number, min: number, max: number) {
   return { height, onMouseDown };
 }
 
-interface HistoryTarget {
-  digest: string;
-  database: string;
-  queryText: string;
-  currentStats: {
-    totalRowsExamined: number;
-    totalExecutions: number;
-    avgRowsExamined: number;
-    totalTimeSec: number;
-    avgTimeSec: number;
-    p99Sec: number;
-    totalLockTimeSec: number;
-    totalCpuTimeSec: number;
-    noIndexUsed?: number;
-    fullJoinCount: number;
-    tmpDiskTables?: number;
-    sortMergePasses?: number;
-  };
-}
-
 export function IopsView() {
   const store = useAppStore();
   const { refresh } = useIops();
 
   const isInvestigating = store.timeRange.label === 'Custom';
   const [showChart, setShowChart] = useState(true);
-  const [historyTarget, setHistoryTarget] = useState<HistoryTarget | null>(null);
   const tableRef = useRef<HTMLDivElement>(null);
   const highlightedStmt = useAppStore((s) => s.highlightedStmt);
   const { height: chartHeight, onMouseDown: onResizeStart } = useResizable(200, 80, 600);
@@ -357,20 +321,9 @@ export function IopsView() {
 
           {/* Table */}
           <div className="flex-1 overflow-auto overflow-x-auto" ref={tableRef}>
-            <StatementsTable highlightedStmt={highlightedStmt} onShowHistory={setHistoryTarget} />
+            <StatementsTable highlightedStmt={highlightedStmt} />
           </div>
         </>
-      )}
-
-      {/* History Modal */}
-      {historyTarget && (
-        <HistoryModal
-          digest={historyTarget.digest}
-          database={historyTarget.database}
-          queryText={historyTarget.queryText}
-          currentStats={historyTarget.currentStats}
-          onClose={() => setHistoryTarget(null)}
-        />
       )}
     </div>
   );
@@ -384,7 +337,7 @@ function formatLastSeen(iso: string, utc: boolean): string {
     : d.toLocaleTimeString();
 }
 
-function StatementsTable({ highlightedStmt, onShowHistory }: { highlightedStmt: number | null; onShowHistory: (target: HistoryTarget) => void }) {
+function StatementsTable({ highlightedStmt }: { highlightedStmt: number | null }) {
   const statements = useAppStore((s) => s.topStatements);
   const loading = useAppStore((s) => s.iopsLoading);
   const showUtc = useAppStore((s) => s.showUtc);
@@ -396,7 +349,24 @@ function StatementsTable({ highlightedStmt, onShowHistory }: { highlightedStmt: 
 
   return (
     <div>
-      <table className="w-full text-xs">
+      <table className="w-full text-xs table-fixed">
+        <colgroup>
+          <col style={{ width: 28 }} />   {/* # */}
+          <col style={{ width: 52 }} />   {/* Impact */}
+          <col style={{ width: 100 }} />  {/* Database */}
+          <col style={{ width: 200 }} />  {/* Query */}
+          <col style={{ width: 70 }} />   {/* Rows Examined */}
+          <col style={{ width: 65 }} />   {/* Avg Rows/Exec */}
+          <col style={{ width: 65 }} />   {/* Executions */}
+          <col style={{ width: 58 }} />   {/* Avg Time */}
+          <col style={{ width: 58 }} />   {/* P99 */}
+          <col style={{ width: 52 }} />   {/* Lock */}
+          <col style={{ width: 38 }} />   {/* No Index */}
+          <col style={{ width: 38 }} />   {/* Full Join */}
+          <col style={{ width: 38 }} />   {/* Tmp Disk */}
+          <col style={{ width: 38 }} />   {/* Sort Spill */}
+          <col style={{ width: 56 }} />   {/* Last Seen */}
+        </colgroup>
         <thead>
           <tr className="text-left text-gray-500 uppercase tracking-wider border-b border-gray-800 sticky top-0 bg-gray-900 z-10">
             <Th tip="Rank by total I/O impact — #1 is the biggest contributor to IOPS consumption">#</Th>
@@ -432,66 +402,47 @@ function StatementsTable({ highlightedStmt, onShowHistory }: { highlightedStmt: 
                   : 'border-gray-800/50 hover:bg-gray-800/50';
             return (
               <tr key={s.digest} data-stmt={num} className={`border-b transition-colors ${rowBg}`}>
-                <td className="px-4 py-2 text-gray-600">{num}</td>
+                <td className="px-2 py-1.5 text-gray-600">{num}</td>
                 <ImpactCell pct={pct} />
-                <td className="px-4 py-2 text-gray-400">{s.db}</td>
+                <td className="px-2 py-1.5 text-gray-400 overflow-hidden text-ellipsis whitespace-nowrap">{s.db}</td>
                 <QueryCell
                   text={s.queryText}
                   sampleText={s.querySampleText || undefined}
-                  onHistory={() => onShowHistory({
-                    digest: s.digest,
-                    database: s.db,
-                    queryText: s.queryText,
-                    currentStats: {
-                      totalRowsExamined: s.totalRowsExamined,
-                      totalExecutions: s.totalExecutions,
-                      avgRowsExamined: s.avgRowsExamined,
-                      totalTimeSec: s.totalTimeSec,
-                      avgTimeSec: s.avgTimeSec,
-                      p99Sec: s.p99Sec,
-                      totalLockTimeSec: s.totalLockTimeSec,
-                      totalCpuTimeSec: s.totalCpuTimeSec,
-                      noIndexUsed: s.noIndexUsed,
-                      fullJoinCount: s.fullJoinCount,
-                      tmpDiskTables: s.tmpDiskTables,
-                      sortMergePasses: s.sortMergePasses,
-                    },
-                  })}
                 />
-                <td className="px-4 py-2 text-right text-orange-400 font-medium">{formatNumber(s.totalRowsExamined)}</td>
-                <td className="px-4 py-2 text-right">
+                <td className="px-2 py-1.5 text-right text-orange-400 font-medium">{formatNumber(s.totalRowsExamined)}</td>
+                <td className="px-2 py-1.5 text-right">
                   {s.avgRowsExamined > 500
                     ? <span className="text-amber-400 font-medium" title="High scan count — possible missing index">{formatNumber(s.avgRowsExamined)}</span>
                     : <span className="text-gray-300">{formatNumber(s.avgRowsExamined)}</span>
                   }
                 </td>
-                <td className="px-4 py-2 text-right text-gray-400">{formatNumber(s.totalExecutions)}</td>
-                <td className="px-4 py-2 text-right text-gray-400">{formatTime(s.avgTimeSec)}</td>
-                <td className="px-4 py-2 text-right">
+                <td className="px-2 py-1.5 text-right text-gray-400">{formatNumber(s.totalExecutions)}</td>
+                <td className="px-2 py-1.5 text-right text-gray-400">{formatTime(s.avgTimeSec)}</td>
+                <td className="px-2 py-1.5 text-right">
                   {s.p99Sec > 0 && s.avgTimeSec > 0 && s.p99Sec > s.avgTimeSec * 5
                     ? <span className="text-amber-400 font-medium" title={`${(s.p99Sec / s.avgTimeSec).toFixed(0)}x avg`}>{formatTime(s.p99Sec)}</span>
                     : <span className="text-gray-400">{s.p99Sec > 0 ? formatTime(s.p99Sec) : '-'}</span>
                   }
                 </td>
-                <td className="px-4 py-2 text-right">
+                <td className="px-2 py-1.5 text-right">
                   {s.totalTimeSec > 0 && s.totalLockTimeSec > s.totalTimeSec * 0.3
                     ? <span className="text-red-400 font-medium" title={`${((s.totalLockTimeSec / s.totalTimeSec) * 100).toFixed(0)}% of time in locks`}>{formatTime(s.totalLockTimeSec)}</span>
                     : <span className="text-gray-400">{s.totalLockTimeSec > 0 ? formatTime(s.totalLockTimeSec) : '-'}</span>
                   }
                 </td>
-                <td className="px-4 py-2 text-right">
+                <td className="px-2 py-1.5 text-right">
                   {s.noIndexUsed > 0 ? <span className="text-red-400">{formatNumber(s.noIndexUsed)}</span> : <span className="text-gray-600">0</span>}
                 </td>
-                <td className="px-4 py-2 text-right">
+                <td className="px-2 py-1.5 text-right">
                   {s.fullJoinCount > 0 ? <span className="text-red-400">{formatNumber(s.fullJoinCount)}</span> : <span className="text-gray-600">0</span>}
                 </td>
-                <td className="px-4 py-2 text-right">
+                <td className="px-2 py-1.5 text-right">
                   {s.tmpDiskTables > 0 ? <span className="text-red-400">{formatNumber(s.tmpDiskTables)}</span> : <span className="text-gray-600">0</span>}
                 </td>
-                <td className="px-4 py-2 text-right">
+                <td className="px-2 py-1.5 text-right">
                   {s.sortMergePasses > 0 ? <span className="text-red-400">{formatNumber(s.sortMergePasses)}</span> : <span className="text-gray-600">0</span>}
                 </td>
-                <td className="px-4 py-2 text-right text-gray-500 text-[10px]">
+                <td className="px-2 py-1.5 text-right text-gray-500 text-[10px]">
                   {formatLastSeen(s.lastSeen, showUtc)}
                 </td>
               </tr>

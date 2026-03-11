@@ -1,4 +1,4 @@
-import type { TeleportInstance, TeleportStatus, ConnectionResult, TopStatement, TopConsumer, CloudWatchIopsPoint, DigestHistoryResult } from './types';
+import type { TeleportInstance, TeleportStatus, ConnectionResult, TopStatement, TopConsumer, CloudWatchIopsPoint } from './types';
 
 async function post<T>(url: string, body: Record<string, unknown>): Promise<T> {
   const res = await fetch(url, {
@@ -97,14 +97,6 @@ export function fetchRdsConfig(accountId: string, region: string, instanceId: st
 }> {
   const params = new URLSearchParams({ accountId, region, instanceId });
   return get(`/api/iops/rds-config?${params.toString()}`);
-}
-
-export function fetchDigestHistory(
-  digest: string, database?: string,
-): Promise<DigestHistoryResult> {
-  const params = new URLSearchParams({ digest });
-  if (database) params.set('database', database);
-  return get(`/api/iops/digest-history?${params.toString()}`);
 }
 
 export function fetchCloudWatchIops(
