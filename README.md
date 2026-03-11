@@ -69,7 +69,8 @@ Express on port 3001.
 |-------|--------|---------|
 | `/api/iops/top-statements` | GET | Top I/O statements (delta-based from DBA history) |
 | `/api/iops/top-consumers` | GET | Top consumers (delta I/O x concurrent connections) |
-| `/api/iops/cloudwatch` | GET | Real CloudWatch ReadIOPS + WriteIOPS data |
+| `/api/iops/digest-history` | GET | 7-day historical baseline for a specific query digest |
+| `/api/iops/cloudwatch` | GET | 9 CloudWatch metrics (IOPS, latency, CPU, memory, burst, connections) |
 | `/api/iops/rds-config` | GET | RDS instance config (provisioned IOPS, storage type) via AWS API |
 
 IOPS routes accept `?database=X&since=ISO&until=ISO&limit=N`. CloudWatch route requires `?accountId=X&region=Y&instanceId=Z&since=ISO&until=ISO`. RDS config requires `?accountId=X&region=Y&instanceId=Z`.
@@ -78,7 +79,7 @@ IOPS routes accept `?database=X&since=ISO&until=ISO&limit=N`. CloudWatch route r
 - `services/teleport.ts` — Teleport CLI (`tsh`) integration. Includes tunnel registry and `cleanupAll()`.
 - `services/connection-manager.ts` — Persistent MySQL session management. Exports: `openSession()`, `closeSession()`, `getConnection()`, `getActiveSession()`.
 - `services/iops.ts` — DBA root cause queries using **delta computation** from `dba.events_statements_summary_by_digest_history` (DBA snapshots every ~5 min, 65M+ rows). Uses LAG() window functions with `CAST(... AS SIGNED)` to compute actual I/O deltas. Also reads `performance_schema.events_statements_current` + `threads` for live concurrent query counts. `MAX_EXECUTION_TIME(30000)` safety hint. Includes DB time offset correction for `datetime` columns. Cross-schema joins use `BINARY` comparison to avoid collation conflicts.
-- `services/cloudwatch.ts` — Fetches ReadIOPS + WriteIOPS from CloudWatch via AWS CLI. Dynamic period (60s/300s/900s based on time range). Merges read + write datapoints by timestamp.
+- `services/cloudwatch.ts` — Fetches 9 CloudWatch metrics in parallel via AWS CLI: ReadIOPS, WriteIOPS, DiskQueueDepth, ReadLatency, WriteLatency, CPUUtilization, FreeableMemory, DatabaseConnections, BurstBalance. Dynamic period (60s/300s/900s based on time range). BurstBalance gracefully handles io1/io2 (not available). Merges all metrics by timestamp.
 - `services/aws-rds.ts` — AWS SSO integration: finds cached access token, discovers roles (prefers DBALimited), creates CLI profiles. SSO URL and region configurable via `AWS_SSO_START_URL` and `AWS_SSO_REGION` env vars. Exports `getSsoAccessToken()`, `getAwsProfile()` and `getRdsInstanceConfig()`.
 
 **Key data flow in `services/iops.ts`:**
@@ -95,8 +96,9 @@ IOPS routes accept `?database=X&since=ISO&until=ISO&limit=N`. CloudWatch route r
   - `hooks/useIops.ts` — In overview mode: fetches CloudWatch IOPS only. In investigation mode (drag-zoom/custom range): fetches CloudWatch + DBA data (statements, consumers) in parallel. Auto-fetches provisioned IOPS from AWS RDS API on connect. Request ID guard prevents stale responses.
 - **Components:**
   - `TeleportControls` — Sidebar: cluster/login/instance selectors. No database selector (auto `__ALL__`). Shows connecting indicator and connected status. Includes AWS SSO login flow: detects when SSO is needed (amber prompt), initiates `aws sso login` (opens browser), polls until authenticated, then auto-re-fetches CloudWatch/RDS data.
-  - `RootCauseAnalysis` — Sidebar: plain text RCA narrative with clickable `[#N]` statement references that highlight rows in the main table. Only shown when investigating a custom time range. Groups issues by table, identifies top offender, lists problems (no index, tmp disk, sort spills, high scans).
-  - `IopsView` — Main area: time picker + collapsible chart + toolbar (tabs) + statements/consumers table. Shows "Drag across a spike..." prompt when not investigating. Highlighted statement rows from RCA clickable refs.
+  - `RootCauseAnalysis` — Sidebar: holistic RCA using statements, consumers, and 9 CloudWatch metrics. Infrastructure analysis (storage saturation, burst exhaustion, memory pressure, CPU, connection surges), cross-statement systemic pattern detection (widespread P99 spikes, indexing gaps, lock contention, temp spills, scan-heavy workloads), table breakdown, and clickable fix priority list. Each fix item opens a detailed modal with verbose diagnosis and remediation steps. Only shown when investigating a custom time range.
+  - `HistoryModal` — Modal dialog for 7-day historical comparison of a specific query digest. Side-by-side current vs daily average with green/red percentage change badges, daily sparkline chart. Fetched on-demand per query.
+  - `IopsView` — Main area: time picker + resizable/collapsible chart + statements table with inline history buttons. Shows "Drag across a spike..." prompt when not investigating. Highlighted statement rows from RCA clickable refs.
   - `IopsChart` — SVG chart showing **real CloudWatch IOPS** (ReadIOPS blue, WriteIOPS orange, Total white). Provisioned IOPS threshold line (red dashed, auto-fetched from AWS). Breach zones highlighted red above threshold. Drag-to-zoom. Loading spinner overlay. No DBA data in chart.
   - `TimeRangePicker` — Preset buttons (5min, 30min, 1h, 6h, 12h, 24h) + Custom range with datetime-local inputs and "Investigate" button. UTC/Local toggle.
 - **Layout** — Dark theme with red accent. Left sidebar (w-80): connection controls + RCA narrative. Right main area: collapsible chart + data tables.
@@ -111,9 +113,9 @@ IOPS routes accept `?database=X&since=ISO&until=ISO&limit=N`. CloudWatch route r
 6. Toggle chart visibility to maximize table space
 7. Hover any query to see full text, click to copy for further analysis
 
-**Statements table columns:** #, Database, Query (click to copy), Total Rows Examined, Avg Rows/Exec, Executions, Total Time, Avg Time, No Index, Tmp Disk, Sort Spill, Last Seen
+**Statements table columns:** #, Impact %, Database, Query (history button + click to copy), Total Rows Examined, Avg Rows/Exec, Executions, Avg Time, P99, Lock, No Index, Full Join, Tmp Disk, Sort Spill, Last Seen
 
-**Consumers table columns:** #, Database, Query (click to copy), Effective IOPS, Concurrent, Avg Rows/Exec, Total Rows Examined, Executions, Avg Time, Last Seen
+Consumers tab removed — consumer data (concurrency, effective IOPS) is still fetched and used internally by the holistic RCA engine.
 
 ### Teleport Integration
 
@@ -144,7 +146,8 @@ Server types in `server/src/types.ts`. Client mirrors in `client/src/api/types.t
 - `ConnectionResult` — Database connection verification result
 - `TopStatement` — Query digest stats: rows examined, execution count, timing, index usage, tmpDiskTables, sortMergePasses, first/last seen
 - `TopConsumer` — Same as statement + concurrent connection count and effective IOPS (rows x concurrency)
-- `CloudWatchIopsPoint` — Real IOPS from CloudWatch: timestamp, readIops, writeIops, totalIops
+- `CloudWatchIopsPoint` — 9 CloudWatch metrics: timestamp, readIops, writeIops, totalIops, diskQueueDepth, readLatencyMs, writeLatencyMs, cpuUtilization, freeableMemoryMb, databaseConnections, burstBalance
+- `DigestHistoryResult` — 7-day historical baseline for a query digest: avgPerDay stats, dailyPoints, daysWithData
 - `RdsInstanceConfig` — AWS RDS config: provisionedIops, storageType, allocatedStorageGb, instanceClass, engine, engineVersion
 - `TimeRange` — since/until ISO strings + label
 - `IopsTab` — `'statements' | 'consumers'`
