@@ -53,6 +53,16 @@ export function teleportDisconnect(): Promise<{ disconnected: boolean }> {
   return post('/api/teleport/disconnect', {});
 }
 
+// ===== AWS SSO API =====
+
+export function awsSsoStatus(): Promise<{ loggedIn: boolean }> {
+  return get('/api/aws/sso-status');
+}
+
+export function awsSsoLogin(): Promise<{ started: boolean }> {
+  return post('/api/aws/sso-login', {});
+}
+
 // ===== IOPS API =====
 
 export function fetchTopStatements(

@@ -65,6 +65,11 @@ interface AppState {
   // RCA
   highlightedStmt: number | null;
 
+  // AWS SSO
+  awsSsoLoggedIn: boolean;
+  awsSsoLoggingIn: boolean;
+  awsSsoNeeded: boolean;
+
   // General
   error: string;
   loading: boolean;
@@ -94,6 +99,9 @@ interface AppState {
   setIopsThreshold: (threshold: number) => void;
   setRdsConfig: (config: AppState['rdsConfig']) => void;
   setHighlightedStmt: (stmt: number | null) => void;
+  setAwsSsoLoggedIn: (loggedIn: boolean) => void;
+  setAwsSsoLoggingIn: (loggingIn: boolean) => void;
+  setAwsSsoNeeded: (needed: boolean) => void;
   setError: (error: string) => void;
   setLoading: (loading: boolean) => void;
   reset: () => void;
@@ -126,6 +134,9 @@ const initialState = {
   iopsThreshold: 0,
   rdsConfig: null,
   highlightedStmt: null,
+  awsSsoLoggedIn: false,
+  awsSsoLoggingIn: false,
+  awsSsoNeeded: false,
   error: '',
   loading: false,
 };
@@ -182,6 +193,9 @@ export const useAppStore = create<AppState>((set) => ({
   setIopsThreshold: (threshold) => set({ iopsThreshold: threshold }),
   setRdsConfig: (config) => set({ rdsConfig: config }),
   setHighlightedStmt: (stmt) => set({ highlightedStmt: stmt }),
+  setAwsSsoLoggedIn: (loggedIn) => set(loggedIn ? { awsSsoLoggedIn: true, awsSsoNeeded: false } : { awsSsoLoggedIn: false }),
+  setAwsSsoLoggingIn: (loggingIn) => set({ awsSsoLoggingIn: loggingIn }),
+  setAwsSsoNeeded: (needed) => set({ awsSsoNeeded: needed }),
   setError: (error) => set({ error }),
   setLoading: (loading) => set({ loading }),
   reset: () => set(initialState),

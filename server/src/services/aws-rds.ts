@@ -21,7 +21,7 @@ export interface RdsInstanceConfig {
 /**
  * Get the SSO access token from the cached SSO session.
  */
-async function getSsoAccessToken(): Promise<string | null> {
+export async function getSsoAccessToken(): Promise<string | null> {
   const cacheDir = path.join(os.homedir(), '.aws', 'sso', 'cache');
   try {
     const files = await fs.readdir(cacheDir);

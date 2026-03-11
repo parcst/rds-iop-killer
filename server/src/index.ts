@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import teleportRouter from './routes/teleport.js';
 import iopsRouter from './routes/iops.js';
+import awsRouter from './routes/aws.js';
 import { cleanupAll } from './services/teleport.js';
 import { closeSession } from './services/connection-manager.js';
 
@@ -13,6 +14,7 @@ app.use(express.json());
 
 app.use('/api/teleport', teleportRouter);
 app.use('/api/iops', iopsRouter);
+app.use('/api/aws', awsRouter);
 
 app.listen(PORT, () => {
   console.log(`RDS IOP Killer server running on http://localhost:${PORT}`);

@@ -56,6 +56,13 @@ Express on port 3001.
 | `/api/teleport/disconnect` | POST | Disconnect active session |
 | `/api/teleport/shutdown` | POST | Clean up all tunnels (sendBeacon target) |
 
+**AWS Routes (`routes/aws.ts`):**
+
+| Route | Method | Purpose |
+|-------|--------|---------|
+| `/api/aws/sso-status` | GET | Check if valid AWS SSO session exists (cached token) |
+| `/api/aws/sso-login` | POST | Start AWS SSO login (opens browser via `aws sso login`), client polls sso-status |
+
 **IOPS Routes (`routes/iops.ts`):**
 
 | Route | Method | Purpose |
@@ -72,7 +79,7 @@ IOPS routes accept `?database=X&since=ISO&until=ISO&limit=N`. CloudWatch route r
 - `services/connection-manager.ts` — Persistent MySQL session management. Exports: `openSession()`, `closeSession()`, `getConnection()`, `getActiveSession()`.
 - `services/iops.ts` — DBA root cause queries using **delta computation** from `dba.events_statements_summary_by_digest_history` (DBA snapshots every ~5 min, 65M+ rows). Uses LAG() window functions with `CAST(... AS SIGNED)` to compute actual I/O deltas. Also reads `performance_schema.events_statements_current` + `threads` for live concurrent query counts. `MAX_EXECUTION_TIME(30000)` safety hint. Includes DB time offset correction for `datetime` columns. Cross-schema joins use `BINARY` comparison to avoid collation conflicts.
 - `services/cloudwatch.ts` — Fetches ReadIOPS + WriteIOPS from CloudWatch via AWS CLI. Dynamic period (60s/300s/900s based on time range). Merges read + write datapoints by timestamp.
-- `services/aws-rds.ts` — AWS SSO integration: finds cached access token, discovers roles (prefers DBALimited), creates CLI profiles. SSO URL and region configurable via `AWS_SSO_START_URL` and `AWS_SSO_REGION` env vars. Exports `getAwsProfile()` and `getRdsInstanceConfig()`.
+- `services/aws-rds.ts` — AWS SSO integration: finds cached access token, discovers roles (prefers DBALimited), creates CLI profiles. SSO URL and region configurable via `AWS_SSO_START_URL` and `AWS_SSO_REGION` env vars. Exports `getSsoAccessToken()`, `getAwsProfile()` and `getRdsInstanceConfig()`.
 
 **Key data flow in `services/iops.ts`:**
 1. `getDbTimeOffset()` — computes millisecond offset between JS `Date` and MySQL `NOW()` (needed because `AsOfDate` is `datetime` without timezone)
@@ -81,13 +88,13 @@ IOPS routes accept `?database=X&since=ISO&until=ISO&limit=N`. CloudWatch route r
 
 ### Client (`client/src/`)
 
-- **State** — Zustand store (`store/app-store.ts`) manages Teleport state, connection state, CloudWatch data, DBA data, time range, UTC toggle, RDS config, IOPS threshold, and RCA highlighting (`highlightedStmt`).
+- **State** — Zustand store (`store/app-store.ts`) manages Teleport state, connection state, CloudWatch data, DBA data, time range, UTC toggle, RDS config, IOPS threshold, RCA highlighting (`highlightedStmt`), and AWS SSO state (`awsSsoLoggedIn`, `awsSsoLoggingIn`, `awsSsoNeeded`).
 - **API client** (`api/client.ts`) — Typed fetch wrappers for all endpoints.
 - **Hooks:**
   - `hooks/useTeleport.ts` — Teleport lifecycle: cluster loading, login polling, auto-connect on instance selection (no database selector — IOPS are instance-level, connects with `__ALL__`). Auto-cleanup via `sendBeacon`.
   - `hooks/useIops.ts` — In overview mode: fetches CloudWatch IOPS only. In investigation mode (drag-zoom/custom range): fetches CloudWatch + DBA data (statements, consumers) in parallel. Auto-fetches provisioned IOPS from AWS RDS API on connect. Request ID guard prevents stale responses.
 - **Components:**
-  - `TeleportControls` — Sidebar: cluster/login/instance selectors. No database selector (auto `__ALL__`). Shows connecting indicator and connected status.
+  - `TeleportControls` — Sidebar: cluster/login/instance selectors. No database selector (auto `__ALL__`). Shows connecting indicator and connected status. Includes AWS SSO login flow: detects when SSO is needed (amber prompt), initiates `aws sso login` (opens browser), polls until authenticated, then auto-re-fetches CloudWatch/RDS data.
   - `RootCauseAnalysis` — Sidebar: plain text RCA narrative with clickable `[#N]` statement references that highlight rows in the main table. Only shown when investigating a custom time range. Groups issues by table, identifies top offender, lists problems (no index, tmp disk, sort spills, high scans).
   - `IopsView` — Main area: time picker + collapsible chart + toolbar (tabs) + statements/consumers table. Shows "Drag across a spike..." prompt when not investigating. Highlighted statement rows from RCA clickable refs.
   - `IopsChart` — SVG chart showing **real CloudWatch IOPS** (ReadIOPS blue, WriteIOPS orange, Total white). Provisioned IOPS threshold line (red dashed, auto-fetched from AWS). Breach zones highlighted red above threshold. Drag-to-zoom. Loading spinner overlay. No DBA data in chart.

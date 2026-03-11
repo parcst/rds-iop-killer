@@ -56,7 +56,11 @@ export function useIops() {
       useAppStore.getState().setLastRefreshed(new Date());
     } catch (err: any) {
       if (thisRequest !== requestId.current) return;
-      useAppStore.getState().setIopsError(err.message || 'Failed to fetch IOPS data');
+      const msg = err.message || 'Failed to fetch IOPS data';
+      if (msg.includes('SSO') || msg.includes('sso')) {
+        useAppStore.getState().setAwsSsoNeeded(true);
+      }
+      useAppStore.getState().setIopsError(msg);
     } finally {
       if (thisRequest === requestId.current) {
         useAppStore.getState().setIopsLoading(false);
@@ -79,7 +83,11 @@ export function useIops() {
             }
           })
           .catch((err) => {
-            console.warn('Failed to fetch RDS config from AWS:', err.message);
+            const msg = err.message || '';
+            if (msg.includes('SSO') || msg.includes('sso')) {
+              useAppStore.getState().setAwsSsoNeeded(true);
+            }
+            console.warn('Failed to fetch RDS config from AWS:', msg);
           });
       }
     }
@@ -94,6 +102,27 @@ export function useIops() {
       refresh();
     }
   }, [store.connectionResult, store.timeRange, refresh]);
+
+  // Re-fetch AWS data when SSO login succeeds
+  useEffect(() => {
+    if (store.awsSsoLoggedIn && store.connectionResult) {
+      // Re-fetch RDS config
+      const { selectedInstance, instances } = useAppStore.getState();
+      const instance = instances.find(i => i.name === selectedInstance);
+      if (instance?.accountId && instance?.region && instance?.instanceId) {
+        fetchRdsConfig(instance.accountId, instance.region, instance.instanceId)
+          .then((config) => {
+            useAppStore.getState().setRdsConfig(config);
+            if (config.provisionedIops > 0) {
+              useAppStore.getState().setIopsThreshold(config.provisionedIops);
+            }
+          })
+          .catch(() => {});
+      }
+      // Re-fetch CloudWatch + IOPS data
+      refresh();
+    }
+  }, [store.awsSsoLoggedIn]);
 
   return { refresh };
 }
