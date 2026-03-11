@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { getTopStatements, getTopConsumers } from '../services/iops.js';
+import { getTopStatements, getTopConsumers, getInnodbMetrics } from '../services/iops.js';
 
 const router = Router();
 
@@ -55,6 +55,21 @@ router.get('/cloudwatch', async (req: Request, res: Response) => {
     const profileName = await getAwsProfile(accountId, region);
     const data = await getCloudWatchIops(instanceId, region, profileName, since, until);
     res.json({ cloudwatch: data });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/iops/innodb-metrics?since=ISO&until=ISO
+ * Buffer pool hit ratio and InnoDB physical I/O counters from dba.global_status_history.
+ */
+router.get('/innodb-metrics', async (req: Request, res: Response) => {
+  try {
+    const since = req.query.since as string | undefined;
+    const until = req.query.until as string | undefined;
+    const metrics = await getInnodbMetrics(since, until);
+    res.json(metrics);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

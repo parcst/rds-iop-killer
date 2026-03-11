@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useAppStore } from '../store/app-store';
-import { fetchTopStatements, fetchTopConsumers, fetchCloudWatchIops, fetchRdsConfig } from '../api/client';
+import { fetchTopStatements, fetchTopConsumers, fetchCloudWatchIops, fetchRdsConfig, fetchInnodbMetrics } from '../api/client';
 
 export function useIops() {
   const store = useAppStore();
@@ -31,10 +31,11 @@ export function useIops() {
 
       if (isInvestigating) {
         // Investigating a specific range — fetch DBA data for root cause analysis
-        const [cwRes, statementsRes, consumersRes] = await Promise.all([
+        const [cwRes, statementsRes, consumersRes, innodbRes] = await Promise.all([
           cwPromise,
           fetchTopStatements(db, 25, timeRange.since, timeRange.until),
           fetchTopConsumers(db, 25, timeRange.since, timeRange.until),
+          fetchInnodbMetrics(timeRange.since, timeRange.until).catch(() => null),
         ]);
 
         if (thisRequest !== requestId.current) return;
@@ -42,6 +43,7 @@ export function useIops() {
         if (cwRes) useAppStore.getState().setCloudwatchData(cwRes.cloudwatch);
         useAppStore.getState().setTopStatements(statementsRes.statements);
         useAppStore.getState().setTopConsumers(consumersRes.consumers);
+        useAppStore.getState().setInnodbMetrics(innodbRes);
       } else {
         // Overview mode — just CloudWatch chart, no DBA queries
         const cwRes = await cwPromise;

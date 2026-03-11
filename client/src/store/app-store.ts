@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { TeleportInstance, TeleportStatus, ConnectionResult, TopStatement, TopConsumer, CloudWatchIopsPoint, IopsTab, TimeRange } from '../api/types';
+import type { TeleportInstance, TeleportStatus, ConnectionResult, TopStatement, TopConsumer, CloudWatchIopsPoint, InnodbMetrics, IopsTab, TimeRange } from '../api/types';
 
 function makeTimeRange(label: string, minutes: number): TimeRange {
   const now = new Date();
@@ -62,6 +62,9 @@ interface AppState {
     engineVersion: string;
   } | null;
 
+  // InnoDB metrics (buffer pool, I/O counters)
+  innodbMetrics: InnodbMetrics | null;
+
   // RCA
   highlightedStmt: number | null;
 
@@ -98,6 +101,7 @@ interface AppState {
   setShowUtc: (utc: boolean) => void;
   setIopsThreshold: (threshold: number) => void;
   setRdsConfig: (config: AppState['rdsConfig']) => void;
+  setInnodbMetrics: (metrics: InnodbMetrics | null) => void;
   setHighlightedStmt: (stmt: number | null) => void;
   setAwsSsoLoggedIn: (loggedIn: boolean) => void;
   setAwsSsoLoggingIn: (loggingIn: boolean) => void;
@@ -133,6 +137,7 @@ const initialState = {
   showUtc: false,
   iopsThreshold: 0,
   rdsConfig: null,
+  innodbMetrics: null,
   highlightedStmt: null,
   awsSsoLoggedIn: false,
   awsSsoLoggingIn: false,
@@ -174,6 +179,7 @@ export const useAppStore = create<AppState>((set) => ({
     error: '',
     iopsThreshold: 0,
     rdsConfig: null,
+    innodbMetrics: null,
   }),
   setAvailableDatabases: (databases) => set({ availableDatabases: databases }),
   setSelectedDatabase: (database) => set({ selectedDatabase: database, connectionResult: null }),
@@ -192,6 +198,7 @@ export const useAppStore = create<AppState>((set) => ({
   setShowUtc: (utc) => set({ showUtc: utc }),
   setIopsThreshold: (threshold) => set({ iopsThreshold: threshold }),
   setRdsConfig: (config) => set({ rdsConfig: config }),
+  setInnodbMetrics: (metrics) => set({ innodbMetrics: metrics }),
   setHighlightedStmt: (stmt) => set({ highlightedStmt: stmt }),
   setAwsSsoLoggedIn: (loggedIn) => set(loggedIn ? { awsSsoLoggedIn: true, awsSsoNeeded: false } : { awsSsoLoggedIn: false }),
   setAwsSsoLoggingIn: (loggingIn) => set({ awsSsoLoggingIn: loggingIn }),

@@ -269,6 +269,112 @@ export async function getTopConsumers(
 }
 
 /**
+ * InnoDB metrics from dba.global_status_history for buffer pool hit ratio
+ * and physical I/O counters. Uses delta computation between snapshots.
+ */
+export async function getInnodbMetrics(
+  since?: string,
+  until?: string,
+): Promise<{
+  bufferPool: {
+    avgHitRatio: number;
+    minHitRatio: number;
+    dataPoints: { timestamp: string; hitRatio: number; physicalReads: number; logicalReads: number }[];
+  };
+  ioCounters: {
+    totalDataReads: number;
+    totalDataWrites: number;
+    readWriteRatio: number;
+    dataPoints: { timestamp: string; dataReads: number; dataWrites: number }[];
+  };
+}> {
+  const conn = getConnection();
+  const { offsetMs, jsNow } = await getDbTimeOffset();
+
+  const sinceDate = since ? new Date(since) : new Date(jsNow.getTime() - 60 * 60 * 1000);
+  const untilDate = until ? new Date(until) : jsNow;
+
+  const dbSince = new Date(sinceDate.getTime() + offsetMs);
+  const dbUntil = new Date(untilDate.getTime() + offsetMs);
+  const dbExtendedSince = new Date(dbSince.getTime() - 10 * 60 * 1000);
+
+  const variables = [
+    'Innodb_buffer_pool_read_requests',
+    'Innodb_buffer_pool_reads',
+    'Innodb_data_reads',
+    'Innodb_data_writes',
+  ];
+
+  const [rows] = await conn.query(`
+    SELECT /*+ MAX_EXECUTION_TIME(${MAX_EXEC_MS}) */
+      AsOfDate,
+      VARIABLE_NAME,
+      CAST(VARIABLE_VALUE AS SIGNED) AS val,
+      CAST(VARIABLE_VALUE AS SIGNED) - CAST(LAG(CAST(VARIABLE_VALUE AS SIGNED)) OVER (
+        PARTITION BY VARIABLE_NAME ORDER BY AsOfDate
+      ) AS SIGNED) AS delta
+    FROM dba.global_status_history
+    WHERE VARIABLE_NAME IN (${variables.map(() => '?').join(',')})
+      AND AsOfDate >= ?
+      AND AsOfDate <= ?
+    ORDER BY AsOfDate
+  `, [...variables, dbExtendedSince, dbUntil]);
+
+  // Group deltas by timestamp
+  const byTimestamp = new Map<string, Record<string, number>>();
+  for (const r of rows as any[]) {
+    if (r.delta === null || r.delta < 0) continue; // skip first row (no LAG) and counter resets
+    const ts = new Date(r.AsOfDate);
+    if (ts < dbSince) continue; // extended range was for LAG baseline
+    const tsKey = new Date(ts.getTime() - offsetMs).toISOString();
+    if (!byTimestamp.has(tsKey)) byTimestamp.set(tsKey, {});
+    byTimestamp.get(tsKey)![r.VARIABLE_NAME] = Number(r.delta);
+  }
+
+  // Build buffer pool and I/O data points
+  const bpPoints: { timestamp: string; hitRatio: number; physicalReads: number; logicalReads: number }[] = [];
+  const ioPoints: { timestamp: string; dataReads: number; dataWrites: number }[] = [];
+  let totalLogical = 0, totalPhysical = 0, totalDataReads = 0, totalDataWrites = 0;
+  let minHitRatio = 100;
+
+  for (const [ts, vars] of byTimestamp) {
+    const logical = vars['Innodb_buffer_pool_read_requests'] || 0;
+    const physical = vars['Innodb_buffer_pool_reads'] || 0;
+    const hitRatio = logical > 0 ? ((logical - physical) / logical) * 100 : 100;
+
+    totalLogical += logical;
+    totalPhysical += physical;
+    if (logical > 0) minHitRatio = Math.min(minHitRatio, hitRatio);
+
+    bpPoints.push({ timestamp: ts, hitRatio: Math.round(hitRatio * 100) / 100, physicalReads: physical, logicalReads: logical });
+
+    const dr = vars['Innodb_data_reads'] || 0;
+    const dw = vars['Innodb_data_writes'] || 0;
+    totalDataReads += dr;
+    totalDataWrites += dw;
+    ioPoints.push({ timestamp: ts, dataReads: dr, dataWrites: dw });
+  }
+
+  const avgHitRatio = totalLogical > 0 ? ((totalLogical - totalPhysical) / totalLogical) * 100 : 100;
+
+  return {
+    bufferPool: {
+      avgHitRatio: Math.round(avgHitRatio * 100) / 100,
+      minHitRatio: bpPoints.length > 0 ? Math.round(minHitRatio * 100) / 100 : 100,
+      dataPoints: bpPoints,
+    },
+    ioCounters: {
+      totalDataReads,
+      totalDataWrites,
+      readWriteRatio: (totalDataReads + totalDataWrites) > 0
+        ? Math.round((totalDataReads / (totalDataReads + totalDataWrites)) * 100) / 100
+        : 0.5,
+      dataPoints: ioPoints,
+    },
+  };
+}
+
+/**
  * Chart data from DBA.events_statements_summary_by_digest_history.
  * Computes deltas between consecutive snapshots per digest to derive
  * actual rows examined per interval — real historical I/O rate.

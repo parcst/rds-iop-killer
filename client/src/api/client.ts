@@ -1,4 +1,4 @@
-import type { TeleportInstance, TeleportStatus, ConnectionResult, TopStatement, TopConsumer, CloudWatchIopsPoint } from './types';
+import type { TeleportInstance, TeleportStatus, ConnectionResult, TopStatement, TopConsumer, CloudWatchIopsPoint, InnodbMetrics } from './types';
 
 async function post<T>(url: string, body: Record<string, unknown>): Promise<T> {
   const res = await fetch(url, {
@@ -97,6 +97,15 @@ export function fetchRdsConfig(accountId: string, region: string, instanceId: st
 }> {
   const params = new URLSearchParams({ accountId, region, instanceId });
   return get(`/api/iops/rds-config?${params.toString()}`);
+}
+
+export function fetchInnodbMetrics(
+  since?: string, until?: string,
+): Promise<InnodbMetrics> {
+  const params = new URLSearchParams();
+  if (since) params.set('since', since);
+  if (until) params.set('until', until);
+  return get(`/api/iops/innodb-metrics?${params.toString()}`);
 }
 
 export function fetchCloudWatchIops(

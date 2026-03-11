@@ -81,6 +81,20 @@ export interface CloudWatchIopsPoint {
   burstBalance: number; // -1 = not available (io1/io2)
 }
 
+export interface InnodbMetrics {
+  bufferPool: {
+    avgHitRatio: number;
+    minHitRatio: number;
+    dataPoints: { timestamp: string; hitRatio: number; physicalReads: number; logicalReads: number }[];
+  };
+  ioCounters: {
+    totalDataReads: number;
+    totalDataWrites: number;
+    readWriteRatio: number;
+    dataPoints: { timestamp: string; dataReads: number; dataWrites: number }[];
+  };
+}
+
 export type IopsTab = 'statements' | 'consumers';
 
 export interface TimeRange {
