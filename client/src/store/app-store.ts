@@ -60,6 +60,8 @@ interface AppState {
     instanceClass: string;
     engine: string;
     engineVersion: string;
+    readReplicaSource: string | null;
+    readReplicaIds: string[];
   } | null;
 
   // InnoDB metrics (buffer pool, I/O counters)

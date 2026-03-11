@@ -58,6 +58,34 @@ function suggestIndexColumns(sampleText: string, table: string): string | null {
   return `ALTER TABLE \`${table}\` ADD INDEX idx_${table}_${cols.slice(0, 3).join('_')} (${cols.slice(0, 4).map(c => `\`${c}\``).join(', ')})`;
 }
 
+/** Detect if a query looks like an analytics/reporting candidate that could be offloaded to OLAP */
+function isAnalyticsCandidate(s: TopStatement): { candidate: boolean; reasons: string[] } {
+  const q = s.queryText.toUpperCase();
+  const reasons: string[] = [];
+
+  // Aggregation patterns
+  const hasAgg = /\b(COUNT|SUM|AVG|MIN|MAX|GROUP\s+BY|HAVING)\b/.test(q);
+  if (hasAgg) reasons.push('aggregation/GROUP BY');
+
+  // Large scans with low efficiency (examining way more than returning)
+  const efficiency = s.totalRowsSent > 0 && s.totalRowsExamined > 0 ? s.totalRowsSent / s.totalRowsExamined : 1;
+  if (s.totalRowsExamined > 100000 && efficiency < 0.1) reasons.push('large scan with low return ratio');
+
+  // DISTINCT, subqueries, UNION — common in reporting
+  if (/\b(DISTINCT|UNION)\b/.test(q)) reasons.push('DISTINCT/UNION pattern');
+
+  // Date/time range patterns common in reporting
+  if (/\b(DATE|BETWEEN|INTERVAL|YEAR|MONTH|WEEK|DAY)\b/.test(q) && hasAgg) reasons.push('time-range aggregation');
+
+  // Very high rows examined per execution (analytical scan)
+  if (s.avgRowsExamined > 10000) reasons.push(`${formatNumber(s.avgRowsExamined)} rows/exec scan`);
+
+  // SELECT-only (not a transactional write)
+  const isSelect = q.startsWith('SELECT');
+
+  return { candidate: isSelect && reasons.length >= 2, reasons };
+}
+
 function StmtRef({ num, onSelect }: { num: number; onSelect: (n: number) => void }) {
   return (
     <button
@@ -113,6 +141,8 @@ interface RdsConfig {
   instanceClass: string;
   engine: string;
   engineVersion: string;
+  readReplicaSource: string | null;
+  readReplicaIds: string[];
 }
 
 function buildHitList(
@@ -254,6 +284,22 @@ function buildHitList(
     }
   }
 
+  // Read replica opportunity
+  if (rdsConfig && rdsConfig.readReplicaIds.length > 0) {
+    const selectStmts = statements.filter(s => s.queryText.toUpperCase().startsWith('SELECT'));
+    const selectPct = selectStmts.reduce((s, q) => s + q.totalRowsExamined, 0) / totalRows * 100;
+    if (selectPct > 30) {
+      summary.push([{ type: 'text', value: `Read replica available (${rdsConfig.readReplicaIds.join(', ')}): ${selectPct.toFixed(0)}% of I/O is from SELECT queries that could be routed to the replica, reducing IOPS on the primary by up to ${selectPct.toFixed(0)}%.` }]);
+    }
+  } else if (rdsConfig && rdsConfig.readReplicaIds.length === 0 && !rdsConfig.readReplicaSource) {
+    // No replicas exist — suggest creating one if read-heavy
+    const selectStmts = statements.filter(s => s.queryText.toUpperCase().startsWith('SELECT'));
+    const selectPct = selectStmts.reduce((s, q) => s + q.totalRowsExamined, 0) / totalRows * 100;
+    if (selectPct > 60 && cwInsights.avgTotalIops > 0) {
+      summary.push([{ type: 'text', value: `No read replicas configured, but ${selectPct.toFixed(0)}% of I/O is from SELECTs. Creating a read replica and routing read traffic to it could significantly reduce primary IOPS.` }]);
+    }
+  }
+
   // ── Cross-statement pattern detection ──
   const meaningful = statements.filter(s => s.totalExecutions > 5);
   const investigationStart = new Date(timeRange.since);
@@ -305,6 +351,18 @@ function buildHitList(
       const newPct = newQueries.reduce((s, q) => s + q.totalRowsExamined, 0) / totalRows * 100;
       if (newPct > 5) {
         summary.push([{ type: 'text', value: `${newQueries.length} new query pattern${newQueries.length !== 1 ? 's' : ''} appeared during this window, responsible for ${newPct.toFixed(0)}% of I/O. Likely from a deployment or new code path.` }]);
+      }
+    }
+
+    // OLAP offload pattern detection
+    const olapCandidates = meaningful.filter(s => isAnalyticsCandidate(s).candidate);
+    if (olapCandidates.length >= 2) {
+      const olapPct = olapCandidates.reduce((s, q) => s + q.totalRowsExamined, 0) / totalRows * 100;
+      summary.push([{ type: 'text', value: `${olapCandidates.length} of ${meaningful.length} queries are analytics/reporting patterns (aggregation, large scans, time-range queries) consuming ${olapPct.toFixed(0)}% of I/O. These queries already land in DataBricks/ClickHouse — consider offloading them to the OLAP layer.` }]);
+    } else if (olapCandidates.length === 1) {
+      const olapPct = olapCandidates[0].totalRowsExamined / totalRows * 100;
+      if (olapPct > 10) {
+        summary.push([{ type: 'text', value: `Analytics query detected consuming ${olapPct.toFixed(0)}% of I/O — this data already lands in DataBricks/ClickHouse. If latency allows, offload to the OLAP layer.` }]);
       }
     }
   }
@@ -476,6 +534,12 @@ function buildHitList(
     const indexSuggestion = (s.noIndexUsed > 0 || s.noGoodIndexUsed > 0 || s.avgRowsExamined > 500)
       ? suggestIndexColumns(s.querySampleText, table) : null;
 
+    // Analytics/OLAP offload candidate detection
+    const analytics = isAnalyticsCandidate(s);
+    if (analytics.candidate) {
+      problems.push('OLAP candidate');
+    }
+
     // Build suggestion
     let suggestion = '';
     if (isNewQuery && pct > 5) {
@@ -518,6 +582,16 @@ function buildHitList(
       suggestion = `High volume ${verb} on \`${table}\` \u2014 review if all rows need to be examined`;
     } else {
       suggestion = `Lower priority \u2014 review if this ${verb} on \`${table}\` can be optimized`;
+    }
+
+    // Append OLAP offload suggestion
+    if (analytics.candidate) {
+      suggestion += `\nOLAP offload: This query has ${analytics.reasons.join(', ')} — consider running it against DataBricks/ClickHouse instead of the primary RDS instance.`;
+    }
+
+    // Append replica redirect suggestion for read-heavy queries
+    if (rdsConfig && rdsConfig.readReplicaIds.length > 0 && verb === 'SELECT' && pct > 3) {
+      suggestion += `\nRead replica: Route this SELECT to a read replica (${rdsConfig.readReplicaIds.join(', ')}) to reduce IOPS on the primary.`;
     }
 
     // Append index suggestion to the text
@@ -668,7 +742,9 @@ export function RootCauseAnalysis() {
                     <div className="flex flex-wrap gap-1">
                       {item.problems.map((p, i) => (
                         <span key={i} className={`text-[9px] px-1.5 py-0.5 rounded bg-gray-900/60 border ${
-                          p.startsWith('NEW') ? 'text-blue-300 border-blue-900/40' : 'text-red-300 border-red-900/40'
+                          p.startsWith('NEW') ? 'text-blue-300 border-blue-900/40'
+                            : p === 'OLAP candidate' ? 'text-violet-300 border-violet-900/40'
+                            : 'text-red-300 border-red-900/40'
                         }`}>
                           {p}
                         </span>
@@ -811,7 +887,35 @@ function FixDetailModal({ item, cwInsights, innodbMetrics, onClose }: { item: Hi
     });
   }
 
-  // 11. Buffer pool context
+  // 11. OLAP offload candidate
+  const analytics = isAnalyticsCandidate(s);
+  if (analytics.candidate) {
+    diagnosis.push({
+      title: 'OLAP Offload Candidate',
+      content: `This query exhibits analytics patterns: ${analytics.reasons.join(', ')}.\n\nSince all user databases land in DataBricks/ClickHouse, this query can potentially be offloaded to the OLAP layer instead of running on the primary RDS instance.\n\nConsiderations:\n• Latency: OLAP queries may have higher latency — suitable for dashboards, reports, and batch jobs, not real-time user-facing requests\n• Freshness: Data in the OLAP layer may lag behind RDS by minutes depending on replication\n• Impact: Offloading eliminates these row scans entirely from the primary, directly reducing IOPS`,
+      severity: 'info',
+    });
+  }
+
+  // 12. Read replica suggestion
+  const rdsConfig = useAppStore.getState().rdsConfig;
+  if (rdsConfig && item.verb === 'SELECT') {
+    if (rdsConfig.readReplicaIds.length > 0 && item.pct > 3) {
+      diagnosis.push({
+        title: 'Read Replica Available',
+        content: `This SELECT is responsible for ${item.pct.toFixed(1)}% of I/O. Read replica${rdsConfig.readReplicaIds.length > 1 ? 's' : ''} available: ${rdsConfig.readReplicaIds.join(', ')}.\n\nRouting this query to a read replica would eliminate its IOPS impact on the primary entirely. Consider:\n• Application-level read/write splitting\n• ProxySQL or MySQL Router for automatic read routing\n• Ensure replica lag is acceptable for this query's consistency requirements`,
+        severity: 'warning',
+      });
+    } else if (rdsConfig.readReplicaIds.length === 0 && !rdsConfig.readReplicaSource && item.pct > 10) {
+      diagnosis.push({
+        title: 'Consider Read Replica',
+        content: `No read replicas configured. This SELECT alone accounts for ${item.pct.toFixed(1)}% of I/O. Creating a read replica and routing read-heavy queries to it could significantly reduce primary IOPS.\n\nAWS RDS supports creating read replicas with minimal downtime.`,
+        severity: 'info',
+      });
+    }
+  }
+
+  // 13. Buffer pool context
   if (innodbMetrics && innodbMetrics.bufferPool.avgHitRatio < 99) {
     diagnosis.push({
       title: 'Buffer Pool Impact',

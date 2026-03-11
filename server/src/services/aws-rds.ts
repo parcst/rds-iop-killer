@@ -35,6 +35,8 @@ export interface RdsInstanceConfig {
   instanceClass: string;
   engine: string;
   engineVersion: string;
+  readReplicaSource: string | null;   // non-null if this instance IS a read replica
+  readReplicaIds: string[];           // list of replicas OF this instance
 }
 
 /**
@@ -154,7 +156,7 @@ export async function getRdsInstanceConfig(
     '--db-instance-identifier', instanceId,
     '--region', region,
     '--profile', profileName,
-    '--query', 'DBInstances[0].{Iops:Iops,StorageType:StorageType,AllocatedStorage:AllocatedStorage,DBInstanceClass:DBInstanceClass,Engine:Engine,EngineVersion:EngineVersion}',
+    '--query', 'DBInstances[0].{Iops:Iops,StorageType:StorageType,AllocatedStorage:AllocatedStorage,DBInstanceClass:DBInstanceClass,Engine:Engine,EngineVersion:EngineVersion,ReadReplicaSource:ReadReplicaSourceDBInstanceIdentifier,ReadReplicaIds:ReadReplicaDBInstanceIdentifiers}',
     '--output', 'json',
   ], { timeout: 15_000 });
 
@@ -168,5 +170,7 @@ export async function getRdsInstanceConfig(
     instanceClass: data.DBInstanceClass || '',
     engine: data.Engine || '',
     engineVersion: data.EngineVersion || '',
+    readReplicaSource: data.ReadReplicaSource || null,
+    readReplicaIds: data.ReadReplicaIds || [],
   };
 }

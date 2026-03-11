@@ -94,6 +94,8 @@ export function fetchRdsConfig(accountId: string, region: string, instanceId: st
   instanceClass: string;
   engine: string;
   engineVersion: string;
+  readReplicaSource: string | null;
+  readReplicaIds: string[];
 }> {
   const params = new URLSearchParams({ accountId, region, instanceId });
   return get(`/api/iops/rds-config?${params.toString()}`);
