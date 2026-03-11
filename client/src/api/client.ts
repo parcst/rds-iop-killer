@@ -96,6 +96,7 @@ export function fetchRdsConfig(accountId: string, region: string, instanceId: st
   engineVersion: string;
   readReplicaSource: string | null;
   readReplicaIds: string[];
+  parameterGroupName: string | null;
 }> {
   const params = new URLSearchParams({ accountId, region, instanceId });
   return get(`/api/iops/rds-config?${params.toString()}`);
@@ -108,6 +109,16 @@ export function fetchInnodbMetrics(
   if (since) params.set('since', since);
   if (until) params.set('until', until);
   return get(`/api/iops/innodb-metrics?${params.toString()}`);
+}
+
+export interface RdsParameterGroup {
+  name: string;
+  parameters: Record<string, { value: string; source: string }>;
+}
+
+export function fetchParameterGroup(accountId: string, region: string, parameterGroupName: string): Promise<RdsParameterGroup> {
+  const params = new URLSearchParams({ accountId, region, parameterGroupName });
+  return get(`/api/iops/parameter-group?${params.toString()}`);
 }
 
 export function fetchCloudWatchIops(

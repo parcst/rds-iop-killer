@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useAppStore } from '../store/app-store';
-import { fetchTopStatements, fetchTopConsumers, fetchCloudWatchIops, fetchRdsConfig, fetchInnodbMetrics } from '../api/client';
+import { fetchTopStatements, fetchTopConsumers, fetchCloudWatchIops, fetchRdsConfig, fetchInnodbMetrics, fetchParameterGroup } from '../api/client';
 
 export function useIops() {
   const store = useAppStore();
@@ -95,6 +95,19 @@ export function useIops() {
       }
     }
   }, [store.connectionResult, store.rdsConfig, store.awsSsoLoggedIn]);
+
+  // Auto-fetch parameter group after rdsConfig is loaded
+  useEffect(() => {
+    if (store.rdsConfig?.parameterGroupName && !store.parameterGroup) {
+      const { selectedInstance, instances } = useAppStore.getState();
+      const instance = instances.find(i => i.name === selectedInstance);
+      if (instance?.accountId && instance?.region) {
+        fetchParameterGroup(instance.accountId, instance.region, store.rdsConfig.parameterGroupName)
+          .then((pg) => useAppStore.getState().setParameterGroup(pg))
+          .catch((err) => console.warn('Failed to fetch parameter group:', err.message));
+      }
+    }
+  }, [store.rdsConfig, store.parameterGroup]);
 
   // Refresh when connected or time range changes
   useEffect(() => {

@@ -62,6 +62,11 @@ interface AppState {
     engineVersion: string;
     readReplicaSource: string | null;
     readReplicaIds: string[];
+    parameterGroupName: string | null;
+  } | null;
+  parameterGroup: {
+    name: string;
+    parameters: Record<string, { value: string; source: string }>;
   } | null;
 
   // InnoDB metrics (buffer pool, I/O counters)
@@ -103,6 +108,7 @@ interface AppState {
   setShowUtc: (utc: boolean) => void;
   setIopsThreshold: (threshold: number) => void;
   setRdsConfig: (config: AppState['rdsConfig']) => void;
+  setParameterGroup: (pg: AppState['parameterGroup']) => void;
   setInnodbMetrics: (metrics: InnodbMetrics | null) => void;
   setHighlightedStmt: (stmt: number | null) => void;
   setAwsSsoLoggedIn: (loggedIn: boolean) => void;
@@ -139,6 +145,7 @@ const initialState = {
   showUtc: false,
   iopsThreshold: 0,
   rdsConfig: null,
+  parameterGroup: null,
   innodbMetrics: null,
   highlightedStmt: null,
   awsSsoLoggedIn: false,
@@ -181,6 +188,7 @@ export const useAppStore = create<AppState>((set) => ({
     error: '',
     iopsThreshold: 0,
     rdsConfig: null,
+    parameterGroup: null,
     innodbMetrics: null,
   }),
   setAvailableDatabases: (databases) => set({ availableDatabases: databases }),
@@ -200,6 +208,7 @@ export const useAppStore = create<AppState>((set) => ({
   setShowUtc: (utc) => set({ showUtc: utc }),
   setIopsThreshold: (threshold) => set({ iopsThreshold: threshold }),
   setRdsConfig: (config) => set({ rdsConfig: config }),
+  setParameterGroup: (pg) => set({ parameterGroup: pg }),
   setInnodbMetrics: (metrics) => set({ innodbMetrics: metrics }),
   setHighlightedStmt: (stmt) => set({ highlightedStmt: stmt }),
   setAwsSsoLoggedIn: (loggedIn) => set(loggedIn ? { awsSsoLoggedIn: true, awsSsoNeeded: false } : { awsSsoLoggedIn: false }),

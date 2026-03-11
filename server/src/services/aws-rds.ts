@@ -37,6 +37,42 @@ export interface RdsInstanceConfig {
   engineVersion: string;
   readReplicaSource: string | null;   // non-null if this instance IS a read replica
   readReplicaIds: string[];           // list of replicas OF this instance
+  parameterGroupName: string | null;  // first DB parameter group name
+}
+
+/** IOPS-relevant MySQL parameter names to fetch */
+const IOPS_RELEVANT_PARAMS = [
+  'innodb_buffer_pool_size',
+  'innodb_io_capacity',
+  'innodb_io_capacity_max',
+  'innodb_flush_log_at_trx_commit',
+  'innodb_flush_method',
+  'innodb_log_file_size',
+  'innodb_redo_log_capacity',
+  'innodb_change_buffering',
+  'innodb_read_ahead_threshold',
+  'innodb_lru_scan_depth',
+  'innodb_page_cleaners',
+  'innodb_read_io_threads',
+  'innodb_write_io_threads',
+  'innodb_doublewrite',
+  'tmp_table_size',
+  'max_heap_table_size',
+  'sort_buffer_size',
+  'join_buffer_size',
+  'read_buffer_size',
+  'read_rnd_buffer_size',
+  'max_connections',
+  'table_open_cache',
+  'table_open_cache_instances',
+  'binlog_format',
+  'sync_binlog',
+  'innodb_adaptive_hash_index',
+];
+
+export interface RdsParameterGroup {
+  name: string;
+  parameters: Record<string, { value: string; source: string }>; // source: 'user' | 'system' | 'engine-default'
 }
 
 /**
@@ -156,7 +192,7 @@ export async function getRdsInstanceConfig(
     '--db-instance-identifier', instanceId,
     '--region', region,
     '--profile', profileName,
-    '--query', 'DBInstances[0].{Iops:Iops,StorageType:StorageType,AllocatedStorage:AllocatedStorage,DBInstanceClass:DBInstanceClass,Engine:Engine,EngineVersion:EngineVersion,ReadReplicaSource:ReadReplicaSourceDBInstanceIdentifier,ReadReplicaIds:ReadReplicaDBInstanceIdentifiers}',
+    '--query', 'DBInstances[0].{Iops:Iops,StorageType:StorageType,AllocatedStorage:AllocatedStorage,DBInstanceClass:DBInstanceClass,Engine:Engine,EngineVersion:EngineVersion,ReadReplicaSource:ReadReplicaSourceDBInstanceIdentifier,ReadReplicaIds:ReadReplicaDBInstanceIdentifiers,ParamGroups:DBParameterGroups}',
     '--output', 'json',
   ], { timeout: 15_000 });
 
@@ -172,5 +208,67 @@ export async function getRdsInstanceConfig(
     engineVersion: data.EngineVersion || '',
     readReplicaSource: data.ReadReplicaSource || null,
     readReplicaIds: data.ReadReplicaIds || [],
+    parameterGroupName: data.ParamGroups?.[0]?.DBParameterGroupName || null,
   };
+}
+
+/**
+ * Fetch IOPS-relevant MySQL parameters from the RDS parameter group.
+ * Uses --source user to get only modified params (fast, no pagination),
+ * then fetches specific engine-default params we care about individually.
+ */
+export async function getRdsParameterGroup(
+  accountId: string,
+  region: string,
+  parameterGroupName: string,
+): Promise<RdsParameterGroup | null> {
+  const profileName = await getAwsProfile(accountId, region);
+  const parameters: Record<string, { value: string; source: string }> = {};
+
+  // 1. Fast: get all user-modified parameters (typically <20, single page)
+  const userParams = execFileAsync('aws', [
+    'rds', 'describe-db-parameters',
+    '--db-parameter-group-name', parameterGroupName,
+    '--source', 'user',
+    '--region', region,
+    '--profile', profileName,
+    '--query', 'Parameters[].{Name:ParameterName,Value:ParameterValue,Source:Source}',
+    '--output', 'json',
+  ], { timeout: 15_000 });
+
+  // 2. Fast: get specific engine-default params we care about (batched into small filter)
+  // Split into two calls to keep JMESPath manageable
+  const keyParams = [
+    'innodb_buffer_pool_size', 'innodb_io_capacity', 'innodb_io_capacity_max',
+    'innodb_flush_log_at_trx_commit', 'tmp_table_size', 'max_heap_table_size',
+    'sort_buffer_size', 'max_connections', 'innodb_read_io_threads', 'innodb_write_io_threads',
+  ];
+  const filterExpr = keyParams.map(p => `ParameterName=='${p}'`).join('||');
+  const defaultParams = execFileAsync('aws', [
+    'rds', 'describe-db-parameters',
+    '--db-parameter-group-name', parameterGroupName,
+    '--region', region,
+    '--profile', profileName,
+    '--query', `Parameters[?${filterExpr}].{Name:ParameterName,Value:ParameterValue,Source:Source}`,
+    '--output', 'json',
+  ], { timeout: 15_000 });
+
+  // Run both in parallel
+  const [userResult, defaultResult] = await Promise.all([
+    userParams.catch(() => ({ stdout: '[]' })),
+    defaultParams.catch(() => ({ stdout: '[]' })),
+  ]);
+
+  // Merge: defaults first, then user overrides on top
+  for (const result of [defaultResult, userResult]) {
+    const params = JSON.parse(result.stdout);
+    if (!Array.isArray(params)) continue;
+    for (const p of params) {
+      if (p.Name && p.Value != null) {
+        parameters[p.Name] = { value: String(p.Value), source: p.Source || 'engine-default' };
+      }
+    }
+  }
+
+  return { name: parameterGroupName, parameters };
 }
