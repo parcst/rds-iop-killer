@@ -29,6 +29,7 @@ export interface TeleportStatus {
 export interface TopStatement {
   db: string;
   queryText: string;
+  querySampleText: string;
   digest: string;
   totalExecutions: number;
   totalRowsExamined: number;
@@ -37,8 +38,12 @@ export interface TopStatement {
   avgRowsExamined: number;
   totalTimeSec: number;
   avgTimeSec: number;
+  p99Sec: number;
+  totalLockTimeSec: number;
+  totalCpuTimeSec: number;
   noIndexUsed: number;
   noGoodIndexUsed: number;
+  fullJoinCount: number;
   tmpDiskTables: number;
   sortMergePasses: number;
   lastSeen: string;
@@ -48,12 +53,17 @@ export interface TopStatement {
 export interface TopConsumer {
   db: string;
   queryText: string;
+  querySampleText: string;
   digest: string;
   totalExecutions: number;
   totalRowsExamined: number;
   avgRowsExamined: number;
   totalTimeSec: number;
   avgTimeSec: number;
+  p99Sec: number;
+  totalLockTimeSec: number;
+  totalCpuTimeSec: number;
+  fullJoinCount: number;
   concurrentCount: number;
   effectiveIops: number;
   lastSeen: string;

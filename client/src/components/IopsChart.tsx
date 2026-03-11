@@ -1,7 +1,7 @@
 import { useRef, useState, useCallback } from 'react';
 import { useAppStore } from '../store/app-store';
 
-const PADDING = { top: 20, right: 20, bottom: 32, left: 60 };
+const PADDING = { top: 20, right: 55, bottom: 32, left: 60 };
 
 function formatNumber(n: number): string {
   if (n >= 1_000_000_000) return (n / 1_000_000_000).toFixed(1) + 'B';
@@ -18,7 +18,7 @@ function formatTimeLabel(iso: string, rangeMins: number, utc: boolean): string {
   return d.toLocaleDateString([], { ...opts, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-export function IopsChart() {
+export function IopsChart({ chartHeight = 200 }: { chartHeight?: number }) {
   const cloudwatchData = useAppStore((s) => s.cloudwatchData);
   const timeRange = useAppStore((s) => s.timeRange);
   const setTimeRange = useAppStore((s) => s.setTimeRange);
@@ -33,7 +33,7 @@ export function IopsChart() {
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
 
   const width = 900;
-  const height = 200;
+  const height = chartHeight;
   const chartW = width - PADDING.left - PADDING.right;
   const chartH = height - PADDING.top - PADDING.bottom;
 
@@ -48,11 +48,20 @@ export function IopsChart() {
   const xScale = (i: number) => PADDING.left + (i / Math.max(data.length - 1, 1)) * chartW;
   const yScale = (v: number) => PADDING.top + chartH - (v / yMax) * chartH;
 
+  // Secondary Y axis for DiskQueueDepth + ReadLatency
+  const hasSecondary = data.some(p => p.diskQueueDepth > 0 || p.readLatencyMs > 0);
+  const maxQueue = Math.max(...data.map(p => p.diskQueueDepth), 1);
+  const maxLatency = Math.max(...data.map(p => p.readLatencyMs), 0.1);
+  const y2Max = Math.max(maxQueue, maxLatency) * 1.2;
+  const y2Scale = (v: number) => PADDING.top + chartH - (v / y2Max) * chartH;
+
   // Build SVG paths
   const totalPath = data.map((p, i) => `${i === 0 ? 'M' : 'L'}${xScale(i).toFixed(1)},${yScale(p.totalIops).toFixed(1)}`).join(' ');
   const totalArea = totalPath + ` L${xScale(data.length - 1).toFixed(1)},${yScale(0).toFixed(1)} L${xScale(0).toFixed(1)},${yScale(0).toFixed(1)} Z`;
   const readPath = data.map((p, i) => `${i === 0 ? 'M' : 'L'}${xScale(i).toFixed(1)},${yScale(p.readIops).toFixed(1)}`).join(' ');
   const writePath = data.map((p, i) => `${i === 0 ? 'M' : 'L'}${xScale(i).toFixed(1)},${yScale(p.writeIops).toFixed(1)}`).join(' ');
+  const queuePath = hasSecondary ? data.map((p, i) => `${i === 0 ? 'M' : 'L'}${xScale(i).toFixed(1)},${y2Scale(p.diskQueueDepth).toFixed(1)}`).join(' ') : '';
+  const latencyPath = hasSecondary ? data.map((p, i) => `${i === 0 ? 'M' : 'L'}${xScale(i).toFixed(1)},${y2Scale(p.readLatencyMs).toFixed(1)}`).join(' ') : '';
 
   // Ticks
   const yTicks = [0, yMax * 0.25, yMax * 0.5, yMax * 0.75, yMax];
@@ -111,7 +120,7 @@ export function IopsChart() {
   // Empty state (no data and not loading)
   if (data.length === 0 && !iopsLoading) {
     return (
-      <div className="flex items-center justify-center h-[200px] text-gray-600 text-xs">
+      <div className="flex items-center justify-center text-gray-600 text-xs">
         No CloudWatch data — ensure AWS SSO is active
       </div>
     );
@@ -120,7 +129,7 @@ export function IopsChart() {
   // Pure loading state (no data yet)
   if (data.length === 0 && iopsLoading) {
     return (
-      <div className="flex items-center justify-center h-[200px] text-gray-400 text-xs gap-2">
+      <div className="flex items-center justify-center text-gray-400 text-xs gap-2">
         <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
@@ -224,6 +233,23 @@ export function IopsChart() {
         {/* WriteIOPS line (orange — matches CloudWatch) */}
         <path d={writePath} fill="none" stroke="#f59e0b" strokeWidth={1.5} />
 
+        {/* DiskQueueDepth line (green) */}
+        {hasSecondary && queuePath && (
+          <path d={queuePath} fill="none" stroke="#22c55e" strokeWidth={1} strokeDasharray="4 2" opacity={0.7} />
+        )}
+
+        {/* ReadLatency line (purple) */}
+        {hasSecondary && latencyPath && (
+          <path d={latencyPath} fill="none" stroke="#a855f7" strokeWidth={1} strokeDasharray="4 2" opacity={0.7} />
+        )}
+
+        {/* Secondary Y-axis labels (right side) */}
+        {hasSecondary && [0, y2Max * 0.5, y2Max].map((v, i) => (
+          <text key={`y2-${i}`} x={width - PADDING.right + 8} y={y2Scale(v) + 3} textAnchor="start" fill="#6b7280" fontSize={8}>
+            {v.toFixed(v >= 10 ? 0 : 1)}
+          </text>
+        ))}
+
         {/* Drag selection overlay */}
         {selX1 !== null && selX2 !== null && (
           <rect
@@ -262,6 +288,18 @@ export function IopsChart() {
             <span className="text-[10px] text-gray-500">Provisioned IOPS Limit</span>
           </div>
         )}
+        {hasSecondary && (
+          <>
+            <div className="flex items-center gap-1.5">
+              <div className="w-3 h-0.5 rounded" style={{ borderTop: '1px dashed #22c55e' }} />
+              <span className="text-[10px] text-gray-500">Queue Depth</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <div className="w-3 h-0.5 rounded" style={{ borderTop: '1px dashed #a855f7' }} />
+              <span className="text-[10px] text-gray-500">Read Latency (ms)</span>
+            </div>
+          </>
+        )}
 
         <span className="text-[10px] text-gray-600 ml-auto">Drag to zoom</span>
       </div>
@@ -289,6 +327,12 @@ export function IopsChart() {
           <div>Read: <span className="text-blue-400 font-medium">{formatNumber(hoveredPoint.readIops)}</span></div>
           <div>Write: <span className="text-amber-400 font-medium">{formatNumber(hoveredPoint.writeIops)}</span></div>
           <div>Total: <span className="text-white font-medium">{formatNumber(hoveredPoint.totalIops)}</span></div>
+          {hasSecondary && (
+            <>
+              <div>Queue: <span className="text-green-400 font-medium">{hoveredPoint.diskQueueDepth.toFixed(1)}</span></div>
+              <div>Latency: <span className="text-purple-400 font-medium">{hoveredPoint.readLatencyMs.toFixed(2)}ms</span></div>
+            </>
+          )}
           {iopsThreshold > 0 && hoveredPoint.totalIops > iopsThreshold && (
             <div className="text-red-400 font-bold">BREACH ({((hoveredPoint.totalIops / iopsThreshold) * 100).toFixed(0)}% of limit)</div>
           )}

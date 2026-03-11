@@ -4,7 +4,7 @@ import { fetchTopStatements, fetchTopConsumers, fetchCloudWatchIops, fetchRdsCon
 
 export function useIops() {
   const store = useAppStore();
-  const rdsFetched = useRef(false);
+  const rdsFetchingRef = useRef(false);
   const requestId = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -68,13 +68,13 @@ export function useIops() {
     }
   }, []);
 
-  // Auto-fetch provisioned IOPS from AWS RDS API on connect
+  // Auto-fetch provisioned IOPS from AWS RDS API on connect (retries if rdsConfig is still null)
   useEffect(() => {
-    if (store.connectionResult && !rdsFetched.current) {
-      rdsFetched.current = true;
+    if (store.connectionResult && !store.rdsConfig && !rdsFetchingRef.current) {
       const { selectedInstance, instances } = useAppStore.getState();
       const instance = instances.find(i => i.name === selectedInstance);
       if (instance?.accountId && instance?.region && instance?.instanceId) {
+        rdsFetchingRef.current = true;
         fetchRdsConfig(instance.accountId, instance.region, instance.instanceId)
           .then((config) => {
             useAppStore.getState().setRdsConfig(config);
@@ -88,13 +88,11 @@ export function useIops() {
               useAppStore.getState().setAwsSsoNeeded(true);
             }
             console.warn('Failed to fetch RDS config from AWS:', msg);
-          });
+          })
+          .finally(() => { rdsFetchingRef.current = false; });
       }
     }
-    if (!store.connectionResult) {
-      rdsFetched.current = false;
-    }
-  }, [store.connectionResult]);
+  }, [store.connectionResult, store.rdsConfig, store.awsSsoLoggedIn]);
 
   // Refresh when connected or time range changes
   useEffect(() => {
@@ -103,23 +101,9 @@ export function useIops() {
     }
   }, [store.connectionResult, store.timeRange, refresh]);
 
-  // Re-fetch AWS data when SSO login succeeds
+  // Re-fetch CloudWatch data when SSO login succeeds
   useEffect(() => {
     if (store.awsSsoLoggedIn && store.connectionResult) {
-      // Re-fetch RDS config
-      const { selectedInstance, instances } = useAppStore.getState();
-      const instance = instances.find(i => i.name === selectedInstance);
-      if (instance?.accountId && instance?.region && instance?.instanceId) {
-        fetchRdsConfig(instance.accountId, instance.region, instance.instanceId)
-          .then((config) => {
-            useAppStore.getState().setRdsConfig(config);
-            if (config.provisionedIops > 0) {
-              useAppStore.getState().setIopsThreshold(config.provisionedIops);
-            }
-          })
-          .catch(() => {});
-      }
-      // Re-fetch CloudWatch + IOPS data
       refresh();
     }
   }, [store.awsSsoLoggedIn]);

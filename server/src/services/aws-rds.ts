@@ -6,8 +6,27 @@ import fs from 'fs/promises';
 
 const execFileAsync = promisify(execFile);
 
-const SSO_START_URL = process.env.AWS_SSO_START_URL || 'https://your-sso-portal.awsapps.com/start';
 const SSO_REGION = process.env.AWS_SSO_REGION || 'us-east-1';
+
+/** Read the real SSO start URL from existing AWS config (default profile), with env var override. */
+async function getSsoStartUrl(): Promise<string> {
+  if (process.env.AWS_SSO_START_URL) return process.env.AWS_SSO_START_URL;
+  try {
+    const configPath = path.join(os.homedir(), '.aws', 'config');
+    const content = await fs.readFile(configPath, 'utf-8');
+    // Find sso_start_url from the [default] profile or any profile
+    const match = content.match(/sso_start_url\s*=\s*(https:\/\/\S+)/);
+    if (match) return match[1];
+  } catch { /* ignore */ }
+  throw new Error('No AWS SSO start URL found. Set AWS_SSO_START_URL or configure a profile with sso_start_url in ~/.aws/config');
+}
+
+// Cached after first resolution
+let _ssoStartUrl: string | null = null;
+async function ssoStartUrl(): Promise<string> {
+  if (!_ssoStartUrl) _ssoStartUrl = await getSsoStartUrl();
+  return _ssoStartUrl;
+}
 
 export interface RdsInstanceConfig {
   provisionedIops: number;
@@ -93,9 +112,10 @@ async function ensureProfile(accountId: string, region: string, roleName: string
     existing = await fs.readFile(configPath, 'utf-8');
   } catch { /* file doesn't exist yet */ }
 
+  const startUrl = await ssoStartUrl();
   const profileHeader = `[profile ${profileName}]`;
   if (!existing.includes(profileHeader)) {
-    const block = `\n${profileHeader}\nsso_start_url = ${SSO_START_URL}\nsso_region = ${SSO_REGION}\nsso_account_id = ${accountId}\nsso_role_name = ${roleName}\nregion = ${region}\n`;
+    const block = `\n${profileHeader}\nsso_start_url = ${startUrl}\nsso_region = ${SSO_REGION}\nsso_account_id = ${accountId}\nsso_role_name = ${roleName}\nregion = ${region}\n`;
     await fs.appendFile(configPath, block);
   }
 

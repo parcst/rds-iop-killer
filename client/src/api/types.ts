@@ -26,6 +26,7 @@ export interface ConnectionResult {
 export interface TopStatement {
   db: string;
   queryText: string;
+  querySampleText: string;
   digest: string;
   totalExecutions: number;
   totalRowsExamined: number;
@@ -34,8 +35,12 @@ export interface TopStatement {
   avgRowsExamined: number;
   totalTimeSec: number;
   avgTimeSec: number;
+  p99Sec: number;
+  totalLockTimeSec: number;
+  totalCpuTimeSec: number;
   noIndexUsed: number;
   noGoodIndexUsed: number;
+  fullJoinCount: number;
   tmpDiskTables: number;
   sortMergePasses: number;
   lastSeen: string;
@@ -45,12 +50,17 @@ export interface TopStatement {
 export interface TopConsumer {
   db: string;
   queryText: string;
+  querySampleText: string;
   digest: string;
   totalExecutions: number;
   totalRowsExamined: number;
   avgRowsExamined: number;
   totalTimeSec: number;
   avgTimeSec: number;
+  p99Sec: number;
+  totalLockTimeSec: number;
+  totalCpuTimeSec: number;
+  fullJoinCount: number;
   concurrentCount: number;
   effectiveIops: number;
   lastSeen: string;
@@ -62,6 +72,37 @@ export interface CloudWatchIopsPoint {
   readIops: number;
   writeIops: number;
   totalIops: number;
+  diskQueueDepth: number;
+  readLatencyMs: number;
+  writeLatencyMs: number;
+  cpuUtilization: number;
+  freeableMemoryMb: number;
+  databaseConnections: number;
+  burstBalance: number; // -1 = not available (io1/io2)
+}
+
+export interface DigestHistoryResult {
+  avgPerDay: {
+    totalRowsExamined: number;
+    totalExecutions: number;
+    avgRowsExamined: number;
+    totalTimeSec: number;
+    avgTimeSec: number;
+    p99Sec: number;
+    totalLockTimeSec: number;
+    totalCpuTimeSec: number;
+    noIndexUsed: number;
+    fullJoinCount: number;
+    tmpDiskTables: number;
+    sortMergePasses: number;
+  };
+  dailyPoints: {
+    date: string;
+    totalRowsExamined: number;
+    totalExecutions: number;
+    avgTimeSec: number;
+  }[];
+  daysWithData: number;
 }
 
 export type IopsTab = 'statements' | 'consumers';
