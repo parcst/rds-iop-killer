@@ -58,12 +58,92 @@ function truncateQuery(text: string, max = 120): string {
   return text.slice(0, max) + '...';
 }
 
+/**
+ * Lightweight SQL pretty-printer for MySQL digest queries.
+ * Adds newlines + indentation at major clause boundaries.
+ */
+function formatSql(sql: string): string {
+  // Normalize whitespace
+  let s = sql.replace(/\s+/g, ' ').trim();
+
+  // Major clauses that start on a new line (no indent)
+  const topClauses = [
+    'SELECT', 'FROM', 'WHERE', 'GROUP BY', 'HAVING', 'ORDER BY',
+    'LIMIT', 'INSERT INTO', 'UPDATE', 'DELETE FROM', 'SET',
+    'VALUES', 'ON DUPLICATE KEY UPDATE', 'UNION ALL', 'UNION',
+    'LEFT JOIN', 'RIGHT JOIN', 'INNER JOIN', 'OUTER JOIN',
+    'CROSS JOIN', 'JOIN', 'ON', 'USING',
+  ];
+
+  // Build regex: match clause keywords at word boundaries (case-insensitive)
+  // Sort longest first so "GROUP BY" matches before "GROUP"
+  const sorted = [...topClauses].sort((a, b) => b.length - a.length);
+  const clauseRe = new RegExp(
+    `\\b(${sorted.map(c => c.replace(/ /g, '\\s+')).join('|')})\\b`,
+    'gi',
+  );
+
+  // Replace clause keywords with newline + keyword
+  s = s.replace(clauseRe, (match) => {
+    const upper = match.replace(/\s+/g, ' ').toUpperCase();
+    // JOIN/ON get indented
+    if (/JOIN|^ON$|^USING$/i.test(upper)) {
+      return '\n  ' + upper;
+    }
+    return '\n' + upper;
+  });
+
+  // Indent column lists after SELECT (comma-separated items)
+  const lines = s.split('\n');
+  const result: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    // For SELECT line, split columns by commas
+    if (/^SELECT\b/i.test(trimmed)) {
+      const afterSelect = trimmed.replace(/^SELECT\s*/i, '');
+      const cols = splitTopLevelCommas(afterSelect);
+      if (cols.length > 1) {
+        result.push('SELECT');
+        cols.forEach((col, i) => {
+          result.push('  ' + col.trim() + (i < cols.length - 1 ? ',' : ''));
+        });
+        continue;
+      }
+    }
+
+    result.push(trimmed.startsWith('\n') ? trimmed : line.trimEnd());
+  }
+
+  // Indent AND/OR within WHERE
+  return result.join('\n').replace(/\b(AND|OR)\b/gi, '\n  $1');
+}
+
+/** Split by commas that aren't inside parentheses */
+function splitTopLevelCommas(s: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '(') depth++;
+    else if (s[i] === ')') depth--;
+    else if (s[i] === ',' && depth === 0) {
+      parts.push(s.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(s.slice(start));
+  return parts;
+}
+
 function QueryCell({ text }: { text: string }) {
   const [show, setShow] = useState(false);
   const [copied, setCopied] = useState(false);
+  const formatted = formatSql(text);
 
   const handleClick = () => {
-    navigator.clipboard.writeText(text).then(() => {
+    navigator.clipboard.writeText(formatted).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });
@@ -78,9 +158,9 @@ function QueryCell({ text }: { text: string }) {
     >
       {truncateQuery(text)}
       {show && (
-        <div className="absolute z-50 left-0 top-full mt-1 max-w-[600px] max-h-[300px] overflow-auto bg-gray-900 border border-gray-600 rounded-lg shadow-xl px-3 py-2 text-[11px] text-gray-200 font-mono whitespace-pre-wrap break-all">
+        <div className="absolute z-50 left-0 top-full mt-1 max-w-[600px] max-h-[300px] overflow-auto bg-gray-900 border border-gray-600 rounded-lg shadow-xl px-3 py-2 text-[11px] text-gray-200 font-mono whitespace-pre break-all">
           {copied && <div className="text-green-400 text-[10px] mb-1 font-sans">Copied to clipboard!</div>}
-          {text}
+          {formatted}
         </div>
       )}
     </td>
