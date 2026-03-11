@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, } from 'react';
 import { useAppStore } from '../store/app-store';
 import { useTeleport } from '../hooks/useTeleport';
 import { awsSsoStatus, awsSsoLogin } from '../api/client';
@@ -57,6 +57,18 @@ export function TeleportControls() {
 
   const isLoggedIn = store.loginStatus?.loggedIn ?? false;
   const isConnected = !!store.connectionResult;
+
+  // Auto-trigger SSO login when needed
+  const autoSsoTriggered = useRef(false);
+  useEffect(() => {
+    if (isConnected && store.awsSsoNeeded && !store.awsSsoLoggedIn && !store.awsSsoLoggingIn && !autoSsoTriggered.current) {
+      autoSsoTriggered.current = true;
+      startAwsSsoLogin();
+    }
+    if (!store.awsSsoNeeded) {
+      autoSsoTriggered.current = false;
+    }
+  }, [isConnected, store.awsSsoNeeded, store.awsSsoLoggedIn, store.awsSsoLoggingIn, startAwsSsoLogin]);
 
   return (
     <div className="space-y-3">

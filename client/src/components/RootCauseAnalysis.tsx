@@ -715,12 +715,11 @@ export function RootCauseAnalysis() {
   const rdsConfig = useAppStore((s) => s.rdsConfig);
   const timeRange = useAppStore((s) => s.timeRange);
   const innodbMetrics = useAppStore((s) => s.innodbMetrics);
-  const isInvestigating = useAppStore((s) => s.timeRange.label === 'Custom');
   const setHighlightedStmt = useAppStore((s) => s.setHighlightedStmt);
   const [selectedItem, setSelectedItem] = useState<HitListItem | null>(null);
   const [detailCwInsights, setDetailCwInsights] = useState<CwInsights | null>(null);
 
-  if (!isInvestigating || statements.length === 0) return null;
+  if (statements.length === 0) return null;
 
   const { executiveSummary, summary, items, cwInsights: cw } = buildHitList(
     statements, consumers, cloudwatchData, rdsConfig, timeRange, innodbMetrics,

@@ -220,7 +220,6 @@ export function IopsView() {
   const store = useAppStore();
   const { refresh } = useIops();
 
-  const isInvestigating = store.timeRange.label === 'Custom';
   const [showChart, setShowChart] = useState(true);
   const tableRef = useRef<HTMLDivElement>(null);
   const highlightedStmt = useAppStore((s) => s.highlightedStmt);
@@ -243,51 +242,29 @@ export function IopsView() {
         <TimeRangePicker />
       </div>
 
-      {/* Chart section — collapsible when investigating, always resizable */}
-      {isInvestigating ? (
-        <div className="border-b border-gray-800">
-          <button
-            onClick={() => setShowChart(!showChart)}
-            className="w-full flex items-center gap-1.5 px-4 py-1 text-[10px] text-gray-500 hover:text-gray-400 bg-gray-900/50"
-          >
-            <span className={`transition-transform ${showChart ? 'rotate-90' : ''}`}>&#9654;</span>
-            IOPS Chart
-          </button>
-          {showChart && (
-            <>
-              <div className="bg-gray-950">
-                <IopsChart chartHeight={chartHeight} />
-              </div>
-              <div
-                onMouseDown={onResizeStart}
-                className="h-1.5 cursor-row-resize bg-gray-800 hover:bg-gray-600 transition-colors flex items-center justify-center"
-              >
-                <div className="w-8 h-0.5 rounded bg-gray-600" />
-              </div>
-            </>
-          )}
-        </div>
-      ) : (
-        <div className="border-b border-gray-800">
-          <div className="bg-gray-950" style={{ height: chartHeight }}>
-            <IopsChart />
-          </div>
-          <div
-            onMouseDown={onResizeStart}
-            className="h-1.5 cursor-row-resize bg-gray-800 hover:bg-gray-600 transition-colors flex items-center justify-center"
-          >
-            <div className="w-8 h-0.5 rounded bg-gray-600" />
-          </div>
-        </div>
-      )}
-
-      {/* Prompt to investigate */}
-      {!isInvestigating && !store.iopsLoading && store.cloudwatchData.length > 0 && (
-        <div className="px-6 py-6 text-center">
-          <p className="text-gray-300 text-sm font-medium">Drag across a spike on the chart to investigate root cause</p>
-          <p className="text-gray-500 text-xs mt-1">Select a time range on the IOPS chart above to drill into query-level analysis</p>
-        </div>
-      )}
+      {/* Chart section — collapsible, resizable */}
+      <div className="border-b border-gray-800">
+        <button
+          onClick={() => setShowChart(!showChart)}
+          className="w-full flex items-center gap-1.5 px-4 py-1 text-[10px] text-gray-500 hover:text-gray-400 bg-gray-900/50"
+        >
+          <span className={`transition-transform ${showChart ? 'rotate-90' : ''}`}>&#9654;</span>
+          IOPS Chart
+        </button>
+        {showChart && (
+          <>
+            <div className="bg-gray-950">
+              <IopsChart chartHeight={chartHeight} />
+            </div>
+            <div
+              onMouseDown={onResizeStart}
+              className="h-1.5 cursor-row-resize bg-gray-800 hover:bg-gray-600 transition-colors flex items-center justify-center"
+            >
+              <div className="w-8 h-0.5 rounded bg-gray-600" />
+            </div>
+          </>
+        )}
+      </div>
 
       {/* Error */}
       {store.iopsError && (
@@ -296,35 +273,33 @@ export function IopsView() {
         </div>
       )}
 
-      {/* Investigation section */}
-      {isInvestigating && (
-        <>
-          {/* Toolbar */}
-          <div className="flex flex-wrap items-center gap-4 px-6 py-2 bg-gray-900 border-b border-gray-800">
-            <span className="text-xs font-medium text-gray-300">Top Statements</span>
+      {/* Statements section */}
+      <>
+        {/* Toolbar */}
+        <div className="flex flex-wrap items-center gap-4 px-6 py-2 bg-gray-900 border-b border-gray-800">
+          <span className="text-xs font-medium text-gray-300">Top Statements</span>
 
-            <button
-              onClick={refresh}
-              disabled={store.iopsLoading}
-              className="px-3 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-200 disabled:opacity-50 transition-colors"
-            >
-              {store.iopsLoading ? 'Loading...' : 'Refresh'}
-            </button>
+          <button
+            onClick={refresh}
+            disabled={store.iopsLoading}
+            className="px-3 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-200 disabled:opacity-50 transition-colors"
+          >
+            {store.iopsLoading ? 'Loading...' : 'Refresh'}
+          </button>
 
-            <span className="text-[10px] text-gray-600 ml-auto">
-              Highest I/O per individual query pattern
-              {store.lastRefreshed && (
-                <> &middot; {store.lastRefreshed.toLocaleTimeString()}</>
-              )}
-            </span>
-          </div>
+          <span className="text-[10px] text-gray-600 ml-auto">
+            Highest I/O per individual query pattern
+            {store.lastRefreshed && (
+              <> &middot; {store.lastRefreshed.toLocaleTimeString()}</>
+            )}
+          </span>
+        </div>
 
-          {/* Table */}
-          <div className="flex-1 overflow-auto overflow-x-auto" ref={tableRef}>
-            <StatementsTable highlightedStmt={highlightedStmt} />
-          </div>
-        </>
-      )}
+        {/* Table */}
+        <div className="flex-1 overflow-auto overflow-x-auto" ref={tableRef}>
+          <StatementsTable highlightedStmt={highlightedStmt} />
+        </div>
+      </>
     </div>
   );
 }

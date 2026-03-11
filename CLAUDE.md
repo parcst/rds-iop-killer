@@ -94,25 +94,27 @@ IOPS routes accept `?database=X&since=ISO&until=ISO&limit=N`. CloudWatch route r
 - **API client** (`api/client.ts`) — Typed fetch wrappers for all endpoints.
 - **Hooks:**
   - `hooks/useTeleport.ts` — Teleport lifecycle: cluster loading, login polling, auto-connect on instance selection (no database selector — IOPS are instance-level, connects with `__ALL__`). Auto-cleanup via `sendBeacon`.
-  - `hooks/useIops.ts` — In overview mode: fetches CloudWatch IOPS only. In investigation mode (drag-zoom/custom range): fetches CloudWatch + DBA data (statements, consumers) in parallel. Auto-fetches provisioned IOPS from AWS RDS API on connect. Request ID guard prevents stale responses.
+  - `hooks/useIops.ts` — Always fetches CloudWatch + DBA data (statements, consumers, InnoDB metrics) in parallel on every time range change. Auto-fetches provisioned IOPS and parameter group from AWS RDS API on connect. Request ID guard prevents stale responses.
 - **Components:**
-  - `TeleportControls` — Sidebar: cluster/login/instance selectors. No database selector (auto `__ALL__`). Shows connecting indicator and connected status. Includes AWS SSO login flow: detects when SSO is needed (amber prompt), initiates `aws sso login` (opens browser), polls until authenticated, then auto-re-fetches CloudWatch/RDS data.
+  - `TeleportControls` — Sidebar: cluster/login/instance selectors. No database selector (auto `__ALL__`). Shows connecting indicator and connected status. AWS SSO auto-login: automatically triggers `aws sso login` when SSO session is needed (opens browser), polls until authenticated, then re-fetches CloudWatch/RDS data.
   - `ParameterGroupPanel` — Sidebar (between TeleportControls and RCA): dedicated MySQL parameter group analysis. Shows current key values (buffer pool, io capacity, flush settings, tmp/sort buffers, io threads, max connections) with user-modified values highlighted. Workload-aware recommendations with DYNAMIC/STATIC badges. Click any recommendation for a detailed modal with pros/cons, current vs suggested values, apply type explanation (live vs reboot required), and parameter-specific guidance.
-  - `RootCauseAnalysis` — Sidebar: holistic RCA using statements, consumers, 9 CloudWatch metrics, InnoDB buffer pool hit ratio, and RDS config. Executive summary one-liner at top. Infrastructure analysis (storage saturation, burst exhaustion, memory pressure, CPU, connection surges, IOPS headroom, read/write profile, storage type upgrade advice). Read replica detection: if replicas exist, suggests routing SELECTs to replica; if none exist and workload is read-heavy, suggests creating one. OLAP offload detection: identifies analytics/reporting queries (aggregation, GROUP BY, large scans, time-range patterns) and suggests offloading to DataBricks/ClickHouse. Buffer pool hit ratio analysis. Cross-statement systemic patterns (P99 spikes, indexing gaps, suboptimal indexes, lock contention, temp spills, scan-heavy workloads, new query detection, OLAP candidate clustering). Per-statement scoring with scan efficiency ratio, write amplification, index column suggestions parsed from sample SQL, estimated IOPS savings, OLAP offload suggestions, and read replica routing suggestions. Fix priority list with detailed modals (including full prettified SQL, OLAP Offload, Read Replica, and per-statement parameter context). Only shown when investigating a custom time range.
-  - `IopsView` — Main area: time picker + resizable/collapsible chart + statements table. Shows "Drag across a spike..." prompt when not investigating. Highlighted statement rows from RCA clickable refs.
+  - `RootCauseAnalysis` — Sidebar: holistic RCA using statements, consumers, 9 CloudWatch metrics, InnoDB buffer pool hit ratio, and RDS config. Executive summary one-liner at top. Infrastructure analysis (storage saturation, burst exhaustion, memory pressure, CPU, connection surges, IOPS headroom, read/write profile, storage type upgrade advice). Read replica detection: if replicas exist, suggests routing SELECTs to replica; if none exist and workload is read-heavy, suggests creating one. OLAP offload detection: identifies analytics/reporting queries (aggregation, GROUP BY, large scans, time-range patterns) and suggests offloading to DataBricks/ClickHouse. Buffer pool hit ratio analysis. Cross-statement systemic patterns (P99 spikes, indexing gaps, suboptimal indexes, lock contention, temp spills, scan-heavy workloads, new query detection, OLAP candidate clustering). Per-statement scoring with scan efficiency ratio, write amplification, index column suggestions parsed from sample SQL, estimated IOPS savings, OLAP offload suggestions, and read replica routing suggestions. Fix priority list with detailed modals (including full prettified SQL, OLAP Offload, Read Replica, and per-statement parameter context). Shown whenever statements data is available.
+  - `IopsView` — Main area: time picker + resizable/collapsible chart + statements table. Always shows statements and chart. Highlighted statement rows from RCA clickable refs.
   - `IopsChart` — SVG chart showing **real CloudWatch IOPS** (ReadIOPS blue, WriteIOPS orange, Total white). Provisioned IOPS threshold line (red dashed, auto-fetched from AWS). Breach zones highlighted red above threshold. Drag-to-zoom. Loading spinner overlay. No DBA data in chart.
   - `TimeRangePicker` — Preset buttons (5min, 30min, 1h, 6h, 12h, 24h) + Custom range with datetime-local inputs and "Investigate" button. UTC/Local toggle.
 - **Layout** — Dark theme with red accent. Left sidebar (w-80): connection controls + RCA narrative. Right main area: collapsible chart + data tables.
 
 ### IOPS Investigation Workflow
 
-1. Select an RDS instance — auto-connects with `__ALL__`, provisioned IOPS and CloudWatch data auto-fetched from AWS
-2. Overview mode: chart shows real CloudWatch ReadIOPS + WriteIOPS with breach zones highlighted red
-3. Drag-to-zoom into a breach spike → enters investigation mode
-4. Investigation mode: RCA narrative appears in sidebar with clickable statement references; statements/consumers tables show root cause queries
-5. Click `[#N]` refs in RCA to highlight corresponding table rows
-6. Toggle chart visibility to maximize table space
-7. Hover any query to see full text, click to copy for further analysis
+1. Select an RDS instance — auto-connects with `__ALL__`, provisioned IOPS, CloudWatch data, parameter group, and DBA statements all auto-fetched (defaults to last 5 min, UTC)
+2. AWS SSO auto-login: if SSO session is expired, automatically opens browser for re-authentication
+3. Chart shows real CloudWatch ReadIOPS + WriteIOPS with breach zones highlighted red; statements table always visible below
+4. RCA narrative appears in sidebar with clickable statement references; parameter group tuning shown in dedicated panel
+5. Click preset buttons (5min, 30min, 1h, etc.) to change time range — all data refreshes automatically
+6. Drag-to-zoom on chart to narrow into a specific spike
+7. Click `[#N]` refs in RCA to highlight corresponding table rows
+8. Toggle chart visibility to maximize table space
+9. Hover any query to see full text, click to copy for further analysis
 
 **Statements table columns:** #, Impact %, Database, Query (click to copy), Total Rows Examined, Avg Rows/Exec, Executions, Avg Time, P99, Lock, No Index, Full Join, Tmp Disk, Sort Spill, Last Seen
 

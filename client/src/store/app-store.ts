@@ -119,7 +119,7 @@ interface AppState {
   reset: () => void;
 }
 
-const defaultTimeRange = makeTimeRange('Last 1 hour', 60);
+const defaultTimeRange = makeTimeRange('Last 5 min', 5);
 
 const initialState = {
   tshAvailable: false,
@@ -142,7 +142,7 @@ const initialState = {
   refreshInterval: 5,
   lastRefreshed: null,
   timeRange: defaultTimeRange,
-  showUtc: false,
+  showUtc: true,
   iopsThreshold: 0,
   rdsConfig: null,
   parameterGroup: null,

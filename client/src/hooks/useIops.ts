@@ -12,7 +12,6 @@ export function useIops() {
     if (!connectionResult) return;
 
     const thisRequest = ++requestId.current;
-    const isInvestigating = timeRange.label === 'Custom';
     const db = selectedDatabase === '__ALL__' ? undefined : selectedDatabase;
 
     useAppStore.getState().setIopsLoading(true);
@@ -24,36 +23,24 @@ export function useIops() {
     const hasAws = !!(instance?.accountId && instance?.region && instance?.instanceId);
 
     try {
-      // Always fetch CloudWatch IOPS for the chart
+      // Fetch CloudWatch + DBA data in parallel
       const cwPromise = hasAws
         ? fetchCloudWatchIops(instance!.accountId, instance!.region, instance!.instanceId, timeRange.since, timeRange.until)
         : Promise.resolve(null);
 
-      if (isInvestigating) {
-        // Investigating a specific range — fetch DBA data for root cause analysis
-        const [cwRes, statementsRes, consumersRes, innodbRes] = await Promise.all([
-          cwPromise,
-          fetchTopStatements(db, 25, timeRange.since, timeRange.until),
-          fetchTopConsumers(db, 25, timeRange.since, timeRange.until),
-          fetchInnodbMetrics(timeRange.since, timeRange.until).catch(() => null),
-        ]);
+      const [cwRes, statementsRes, consumersRes, innodbRes] = await Promise.all([
+        cwPromise,
+        fetchTopStatements(db, 25, timeRange.since, timeRange.until),
+        fetchTopConsumers(db, 25, timeRange.since, timeRange.until),
+        fetchInnodbMetrics(timeRange.since, timeRange.until).catch(() => null),
+      ]);
 
-        if (thisRequest !== requestId.current) return;
+      if (thisRequest !== requestId.current) return;
 
-        if (cwRes) useAppStore.getState().setCloudwatchData(cwRes.cloudwatch);
-        useAppStore.getState().setTopStatements(statementsRes.statements);
-        useAppStore.getState().setTopConsumers(consumersRes.consumers);
-        useAppStore.getState().setInnodbMetrics(innodbRes);
-      } else {
-        // Overview mode — just CloudWatch chart, no DBA queries
-        const cwRes = await cwPromise;
-
-        if (thisRequest !== requestId.current) return;
-
-        if (cwRes) useAppStore.getState().setCloudwatchData(cwRes.cloudwatch);
-        useAppStore.getState().setTopStatements([]);
-        useAppStore.getState().setTopConsumers([]);
-      }
+      if (cwRes) useAppStore.getState().setCloudwatchData(cwRes.cloudwatch);
+      useAppStore.getState().setTopStatements(statementsRes.statements);
+      useAppStore.getState().setTopConsumers(consumersRes.consumers);
+      useAppStore.getState().setInnodbMetrics(innodbRes);
 
       useAppStore.getState().setLastRefreshed(new Date());
     } catch (err: any) {

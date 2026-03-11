@@ -12,7 +12,7 @@ export default function App() {
       {/* Header */}
       <header className="border-b border-gray-800 bg-gray-950 flex items-center gap-3 px-6 py-4">
         <div className="w-8 h-8 rounded-lg bg-red-600 flex items-center justify-center">
-          <span className="text-white text-sm font-bold">IO</span>
+          <span className="text-white text-sm font-bold">IOP</span>
         </div>
         <div>
           <h1 className="text-lg font-semibold text-white">RDS IOP Killer</h1>

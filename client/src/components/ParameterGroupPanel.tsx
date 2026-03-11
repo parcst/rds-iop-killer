@@ -444,7 +444,6 @@ export function ParameterGroupPanel() {
   const parameterGroup = useAppStore((s) => s.parameterGroup);
   const cloudwatchData = useAppStore((s) => s.cloudwatchData);
   const statements = useAppStore((s) => s.topStatements);
-  const isInvestigating = useAppStore((s) => s.timeRange.label === 'Custom');
   const [selectedRec, setSelectedRec] = useState<ParamRecommendation | null>(null);
 
   if (!parameterGroup || !rdsConfig) {
@@ -543,10 +542,8 @@ export function ParameterGroupPanel() {
             </div>
           ))}
         </div>
-      ) : isInvestigating ? (
-        <div className="text-[10px] text-green-400/70">No parameter tuning issues detected for this workload.</div>
       ) : (
-        <div className="text-[10px] text-gray-500">Investigate a time range for workload-specific recommendations.</div>
+        <div className="text-[10px] text-green-400/70">No parameter tuning issues detected for this workload.</div>
       )}
 
       {/* Detail Modal */}
