@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useAppStore } from '../store/app-store';
+import { jsPDF } from 'jspdf';
 import type { TopStatement, TopConsumer, CloudWatchIopsPoint, InnodbMetrics } from '../api/types';
 
 function formatNumber(n: number): string {
@@ -1039,6 +1040,100 @@ function FixDetailModal({ item, cwInsights, innodbMetrics, onClose }: { item: Hi
   const diagColors = { critical: 'border-red-800/60 bg-red-950/20', warning: 'border-orange-800/50 bg-orange-950/15', info: 'border-gray-700 bg-gray-800/40' };
   const diagIconColors = { critical: 'text-red-400', warning: 'text-orange-400', info: 'text-blue-400' };
 
+  const exportToPdf = useCallback(() => {
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
+    const margin = 15;
+    const contentW = pageW - margin * 2;
+    let y = margin;
+
+    const checkPage = (needed: number) => {
+      if (y + needed > pageH - margin) { doc.addPage(); y = margin; }
+    };
+
+    // Title
+    doc.setFontSize(16);
+    doc.setFont('helvetica', 'bold');
+    doc.text(`#${item.rank} ${item.severity.toUpperCase()} — ${item.verb} on ${item.table}`, margin, y);
+    y += 8;
+
+    // Impact line
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`${item.pct.toFixed(1)}% of IOPS${item.estimatedSavings > 0 ? `  |  ~${formatNumber(item.estimatedSavings)} rows saveable` : ''}`, margin, y);
+    y += 6;
+
+    // Timestamp
+    doc.setFontSize(8);
+    doc.setTextColor(120);
+    doc.text(`Generated: ${new Date().toISOString()}`, margin, y);
+    doc.setTextColor(0);
+    y += 8;
+
+    // Stats
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Statistics', margin, y);
+    y += 5;
+    doc.setFont('helvetica', 'normal');
+    const stats = [
+      `Rows Examined: ${formatNumber(s.totalRowsExamined)}`,
+      `Rows Returned: ${formatNumber(s.totalRowsSent)}`,
+      `Rows/Exec: ${formatNumber(s.avgRowsExamined)}`,
+      `Executions: ${formatNumber(s.totalExecutions)}`,
+      `Avg Time: ${formatTime(s.avgTimeSec)}`,
+      `P99: ${s.p99Sec > 0 ? formatTime(s.p99Sec) : '-'}`,
+      ...(s.totalRowsAffected > 0 ? [`Rows Affected: ${formatNumber(s.totalRowsAffected)}`] : []),
+      ...(item.concurrent > 0 ? [`Concurrent Sessions: ${item.concurrent}`] : []),
+    ];
+    doc.setFontSize(8);
+    stats.forEach(stat => {
+      doc.text(stat, margin + 2, y);
+      y += 4;
+    });
+    y += 4;
+
+    // Full SQL
+    checkPage(30);
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Full Query', margin, y);
+    y += 5;
+    doc.setFont('courier', 'normal');
+    doc.setFontSize(7);
+    const sqlText = formatSql(s.querySampleText || s.queryText);
+    const sqlLines = doc.splitTextToSize(sqlText, contentW - 4);
+    for (const line of sqlLines) {
+      checkPage(4);
+      doc.text(line, margin + 2, y);
+      y += 3.5;
+    }
+    y += 6;
+
+    // Diagnosis sections
+    diagnosis.forEach(d => {
+      checkPage(20);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      const severityLabel = d.severity === 'critical' ? 'CRITICAL' : d.severity === 'warning' ? 'WARNING' : 'INFO';
+      doc.text(`[${severityLabel}] ${d.title}`, margin, y);
+      y += 5;
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      const contentLines = doc.splitTextToSize(d.content.replace(/`/g, ''), contentW - 4);
+      for (const line of contentLines) {
+        checkPage(4);
+        doc.text(line, margin + 2, y);
+        y += 3.8;
+      }
+      y += 4;
+    });
+
+    doc.save(`iop-fix-${item.rank}-${item.table}-${item.verb.toLowerCase()}.pdf`);
+  }, [item, s, diagnosis]);
+
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60" onClick={onClose}>
       <div className="bg-gray-900 border border-gray-700 rounded-lg shadow-2xl w-[640px] max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
@@ -1061,7 +1156,15 @@ function FixDetailModal({ item, cwInsights, innodbMetrics, onClose }: { item: Hi
               {s.queryText.length > 100 ? s.queryText.slice(0, 100) + '...' : s.queryText}
             </div>
           </div>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-lg leading-none shrink-0 mt-0.5">&times;</button>
+          <div className="flex items-center gap-2 shrink-0 mt-0.5">
+            <button
+              onClick={exportToPdf}
+              className="text-[10px] px-2 py-1 rounded border border-gray-600 text-gray-400 hover:text-gray-200 hover:border-gray-400 transition"
+            >
+              Export PDF
+            </button>
+            <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-lg leading-none">&times;</button>
+          </div>
         </div>
 
         {/* Stats bar */}
