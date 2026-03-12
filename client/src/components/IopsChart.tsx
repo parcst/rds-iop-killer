@@ -1,7 +1,18 @@
 import { useRef, useState, useCallback } from 'react';
 import { useAppStore } from '../store/app-store';
 
-const PADDING = { top: 20, right: 55, bottom: 32, left: 60 };
+const PADDING = { top: 20, right: 75, bottom: 32, left: 70 };
+
+type SeriesKey = 'read' | 'write' | 'total' | 'threshold' | 'queue' | 'latency';
+
+const SERIES_CONFIG: Record<SeriesKey, { label: string; color: string; dashed?: boolean; secondary?: boolean }> = {
+  read: { label: 'ReadIOPS', color: '#3b82f6' },
+  write: { label: 'WriteIOPS', color: '#f59e0b' },
+  total: { label: 'Total', color: 'rgba(255,255,255,0.7)' },
+  threshold: { label: 'Provisioned IOPS Limit', color: '#ef4444', dashed: true },
+  queue: { label: 'Queue Depth', color: '#22c55e', dashed: true, secondary: true },
+  latency: { label: 'Read Latency (ms)', color: '#a855f7', dashed: true, secondary: true },
+};
 
 function formatNumber(n: number): string {
   if (n >= 1_000_000_000) return (n / 1_000_000_000).toFixed(1) + 'B';
@@ -26,11 +37,21 @@ export function IopsChart({ chartHeight = 200 }: { chartHeight?: number }) {
   const showUtc = useAppStore((s) => s.showUtc);
   const iopsThreshold = useAppStore((s) => s.iopsThreshold);
 
-
   const svgRef = useRef<SVGSVGElement>(null);
   const [dragStart, setDragStart] = useState<number | null>(null);
   const [dragEnd, setDragEnd] = useState<number | null>(null);
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+  const [hiddenSeries, setHiddenSeries] = useState<Set<SeriesKey>>(new Set());
+
+  const toggleSeries = useCallback((key: SeriesKey) => {
+    setHiddenSeries(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const isVisible = (key: SeriesKey) => !hiddenSeries.has(key);
 
   const width = 900;
   const height = chartHeight;
@@ -41,18 +62,24 @@ export function IopsChart({ chartHeight = 200 }: { chartHeight?: number }) {
 
   const data = cloudwatchData;
 
-  // Y axis — ensure threshold line is always visible
-  const dataMax = Math.max(...data.map(p => p.totalIops), 1);
-  const yMax = Math.max(dataMax, iopsThreshold > 0 ? iopsThreshold * 1.2 : 0) * 1.1;
+  // Y axis — scale based on visible primary series only
+  const primaryMaxes: number[] = [];
+  if (isVisible('total')) primaryMaxes.push(...data.map(p => p.totalIops));
+  if (isVisible('read')) primaryMaxes.push(...data.map(p => p.readIops));
+  if (isVisible('write')) primaryMaxes.push(...data.map(p => p.writeIops));
+  const dataMax = primaryMaxes.length > 0 ? Math.max(...primaryMaxes, 1) : 1;
+  const yMax = Math.max(dataMax, isVisible('threshold') && iopsThreshold > 0 ? iopsThreshold * 1.2 : 0) * 1.1;
 
   const xScale = (i: number) => PADDING.left + (i / Math.max(data.length - 1, 1)) * chartW;
   const yScale = (v: number) => PADDING.top + chartH - (v / yMax) * chartH;
 
-  // Secondary Y axis for DiskQueueDepth + ReadLatency
-  const hasSecondary = data.some(p => p.diskQueueDepth > 0 || p.readLatencyMs > 0);
-  const maxQueue = Math.max(...data.map(p => p.diskQueueDepth), 1);
-  const maxLatency = Math.max(...data.map(p => p.readLatencyMs), 0.1);
-  const y2Max = Math.max(maxQueue, maxLatency) * 1.2;
+  // Secondary Y axis — scale based on visible secondary series only
+  const hasSecondaryData = data.some(p => p.diskQueueDepth > 0 || p.readLatencyMs > 0);
+  const showSecondary = hasSecondaryData && (isVisible('queue') || isVisible('latency'));
+  const secondaryMaxes: number[] = [];
+  if (isVisible('queue')) secondaryMaxes.push(...data.map(p => p.diskQueueDepth));
+  if (isVisible('latency')) secondaryMaxes.push(...data.map(p => p.readLatencyMs));
+  const y2Max = secondaryMaxes.length > 0 ? Math.max(...secondaryMaxes, 0.1) * 1.2 : 1;
   const y2Scale = (v: number) => PADDING.top + chartH - (v / y2Max) * chartH;
 
   // Build SVG paths
@@ -60,11 +87,14 @@ export function IopsChart({ chartHeight = 200 }: { chartHeight?: number }) {
   const totalArea = totalPath + ` L${xScale(data.length - 1).toFixed(1)},${yScale(0).toFixed(1)} L${xScale(0).toFixed(1)},${yScale(0).toFixed(1)} Z`;
   const readPath = data.map((p, i) => `${i === 0 ? 'M' : 'L'}${xScale(i).toFixed(1)},${yScale(p.readIops).toFixed(1)}`).join(' ');
   const writePath = data.map((p, i) => `${i === 0 ? 'M' : 'L'}${xScale(i).toFixed(1)},${yScale(p.writeIops).toFixed(1)}`).join(' ');
-  const queuePath = hasSecondary ? data.map((p, i) => `${i === 0 ? 'M' : 'L'}${xScale(i).toFixed(1)},${y2Scale(p.diskQueueDepth).toFixed(1)}`).join(' ') : '';
-  const latencyPath = hasSecondary ? data.map((p, i) => `${i === 0 ? 'M' : 'L'}${xScale(i).toFixed(1)},${y2Scale(p.readLatencyMs).toFixed(1)}`).join(' ') : '';
+  const queuePath = hasSecondaryData ? data.map((p, i) => `${i === 0 ? 'M' : 'L'}${xScale(i).toFixed(1)},${y2Scale(p.diskQueueDepth).toFixed(1)}`).join(' ') : '';
+  const latencyPath = hasSecondaryData ? data.map((p, i) => `${i === 0 ? 'M' : 'L'}${xScale(i).toFixed(1)},${y2Scale(p.readLatencyMs).toFixed(1)}`).join(' ') : '';
 
-  // Ticks
-  const yTicks = [0, yMax * 0.25, yMax * 0.5, yMax * 0.75, yMax];
+  // Ticks — adapt count to chart height for readability
+  const yTickCount = Math.max(2, Math.min(10, Math.floor(chartH / 30)));
+  const yTicks = Array.from({ length: yTickCount + 1 }, (_, i) => (i / yTickCount) * yMax);
+  const y2TickCount = Math.max(2, Math.min(6, Math.floor(chartH / 50)));
+  const y2Ticks = Array.from({ length: y2TickCount + 1 }, (_, i) => (i / y2TickCount) * y2Max);
   const tickCount = 13;
   const xTicks = Array.from({ length: tickCount }, (_, i) =>
     Math.round((i / (tickCount - 1)) * (data.length - 1))
@@ -145,6 +175,11 @@ export function IopsChart({ chartHeight = 200 }: { chartHeight?: number }) {
   const breachCount = iopsThreshold > 0 ? data.filter(p => p.totalIops > iopsThreshold).length : 0;
   const peak = Math.max(...data.map(p => p.totalIops));
 
+  // Which legend items to show
+  const availableSeries: SeriesKey[] = ['read', 'write', 'total'];
+  if (iopsThreshold > 0) availableSeries.push('threshold');
+  if (hasSecondaryData) availableSeries.push('queue', 'latency');
+
   return (
     <div className="relative">
       {/* Loading overlay — shows on top of stale chart */}
@@ -169,7 +204,7 @@ export function IopsChart({ chartHeight = 200 }: { chartHeight?: number }) {
         onMouseLeave={handleMouseLeave}
       >
         {/* Y-axis label */}
-        <text x={4} y={PADDING.top + chartH / 2} textAnchor="middle" fill="#6b7280" fontSize={8} transform={`rotate(-90, 4, ${PADDING.top + chartH / 2})`}>
+        <text x={14} y={PADDING.top + chartH / 2} textAnchor="middle" fill="#9ca3af" fontSize={10} fontWeight="500" transform={`rotate(-90, 14, ${PADDING.top + chartH / 2})`}>
           IOPS
         </text>
 
@@ -193,7 +228,7 @@ export function IopsChart({ chartHeight = 200 }: { chartHeight?: number }) {
         ))}
 
         {/* Breach zone — red fill above threshold */}
-        {iopsThreshold > 0 && (
+        {isVisible('threshold') && iopsThreshold > 0 && (
           <>
             <defs>
               <clipPath id="breach-clip">
@@ -205,13 +240,13 @@ export function IopsChart({ chartHeight = 200 }: { chartHeight?: number }) {
         )}
 
         {/* Total IOPS area fill */}
-        <path d={totalArea} fill="rgba(255, 255, 255, 0.04)" />
+        {isVisible('total') && <path d={totalArea} fill="rgba(255, 255, 255, 0.04)" />}
 
         {/* Total IOPS line (white) */}
-        <path d={totalPath} fill="none" stroke="rgba(255, 255, 255, 0.7)" strokeWidth={1} />
+        {isVisible('total') && <path d={totalPath} fill="none" stroke="rgba(255, 255, 255, 0.7)" strokeWidth={1} />}
 
         {/* Provisioned IOPS threshold line */}
-        {iopsThreshold > 0 && (
+        {isVisible('threshold') && iopsThreshold > 0 && (
           <>
             <line
               x1={PADDING.left} y1={yScale(iopsThreshold)}
@@ -227,28 +262,33 @@ export function IopsChart({ chartHeight = 200 }: { chartHeight?: number }) {
           </>
         )}
 
-        {/* ReadIOPS line (blue — matches CloudWatch) */}
-        <path d={readPath} fill="none" stroke="#3b82f6" strokeWidth={1.5} />
+        {/* ReadIOPS line (blue) */}
+        {isVisible('read') && <path d={readPath} fill="none" stroke="#3b82f6" strokeWidth={1.5} />}
 
-        {/* WriteIOPS line (orange — matches CloudWatch) */}
-        <path d={writePath} fill="none" stroke="#f59e0b" strokeWidth={1.5} />
+        {/* WriteIOPS line (orange) */}
+        {isVisible('write') && <path d={writePath} fill="none" stroke="#f59e0b" strokeWidth={1.5} />}
 
         {/* DiskQueueDepth line (green) */}
-        {hasSecondary && queuePath && (
+        {isVisible('queue') && hasSecondaryData && queuePath && (
           <path d={queuePath} fill="none" stroke="#22c55e" strokeWidth={1} strokeDasharray="4 2" opacity={0.7} />
         )}
 
         {/* ReadLatency line (purple) */}
-        {hasSecondary && latencyPath && (
+        {isVisible('latency') && hasSecondaryData && latencyPath && (
           <path d={latencyPath} fill="none" stroke="#a855f7" strokeWidth={1} strokeDasharray="4 2" opacity={0.7} />
         )}
 
         {/* Secondary Y-axis labels (right side) */}
-        {hasSecondary && [0, y2Max * 0.5, y2Max].map((v, i) => (
-          <text key={`y2-${i}`} x={width - PADDING.right + 8} y={y2Scale(v) + 3} textAnchor="start" fill="#6b7280" fontSize={8}>
+        {showSecondary && y2Ticks.map((v, i) => (
+          <text key={`y2-${i}`} x={width - PADDING.right + 8} y={y2Scale(v) + 3} textAnchor="start" fill="#6b7280" fontSize={9}>
             {v.toFixed(v >= 10 ? 0 : 1)}
           </text>
         ))}
+        {showSecondary && (
+          <text x={width - 14} y={PADDING.top + chartH / 2} textAnchor="middle" fill="#9ca3af" fontSize={10} fontWeight="500" transform={`rotate(90, ${width - 14}, ${PADDING.top + chartH / 2})`}>
+            Depth / Latency
+          </text>
+        )}
 
         {/* Drag selection overlay */}
         {selX1 !== null && selX2 !== null && (
@@ -268,44 +308,37 @@ export function IopsChart({ chartHeight = 200 }: { chartHeight?: number }) {
         )}
       </svg>
 
-      {/* Legend + threshold config */}
+      {/* Clickable legend */}
       <div className="flex items-center gap-4 px-4 mt-1">
-        <div className="flex items-center gap-1.5">
-          <div className="w-3 h-0.5 bg-blue-500 rounded" />
-          <span className="text-[10px] text-gray-500">ReadIOPS</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div className="w-3 h-0.5 bg-amber-500 rounded" />
-          <span className="text-[10px] text-gray-500">WriteIOPS</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div className="w-3 h-0.5 bg-white/70 rounded" />
-          <span className="text-[10px] text-gray-500">Total</span>
-        </div>
-        {iopsThreshold > 0 && (
-          <div className="flex items-center gap-1.5">
-            <div className="w-3 h-0.5 rounded" style={{ borderTop: '1.5px dashed #ef4444' }} />
-            <span className="text-[10px] text-gray-500">Provisioned IOPS Limit</span>
-          </div>
-        )}
-        {hasSecondary && (
-          <>
-            <div className="flex items-center gap-1.5">
-              <div className="w-3 h-0.5 rounded" style={{ borderTop: '1px dashed #22c55e' }} />
-              <span className="text-[10px] text-gray-500">Queue Depth</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <div className="w-3 h-0.5 rounded" style={{ borderTop: '1px dashed #a855f7' }} />
-              <span className="text-[10px] text-gray-500">Read Latency (ms)</span>
-            </div>
-          </>
-        )}
+        {availableSeries.map(key => {
+          const cfg = SERIES_CONFIG[key];
+          const visible = isVisible(key);
+          return (
+            <button
+              key={key}
+              onClick={() => toggleSeries(key)}
+              className={`flex items-center gap-1.5 transition-opacity ${visible ? 'opacity-100' : 'opacity-35'}`}
+              title={visible ? `Hide ${cfg.label}` : `Show ${cfg.label}`}
+            >
+              <div
+                className="w-3 h-0.5 rounded"
+                style={cfg.dashed
+                  ? { borderTop: `1.5px dashed ${cfg.color}`, opacity: visible ? 1 : 0.4 }
+                  : { backgroundColor: cfg.color, opacity: visible ? 1 : 0.4 }
+                }
+              />
+              <span className={`text-[10px] select-none ${visible ? 'text-gray-400' : 'text-gray-600 line-through'}`}>
+                {cfg.label}
+              </span>
+            </button>
+          );
+        })}
 
         <span className="text-[10px] text-gray-600 ml-auto">Drag to zoom</span>
       </div>
 
       {/* Breach summary */}
-      {iopsThreshold > 0 && breachCount > 0 && (
+      {isVisible('threshold') && iopsThreshold > 0 && breachCount > 0 && (
         <div className="flex items-center gap-2 px-4 mt-0.5 mb-1">
           <span className="text-[10px] font-medium text-red-400">
             BREACH — {breachCount} of {data.length} intervals exceed provisioned IOPS
@@ -324,16 +357,16 @@ export function IopsChart({ chartHeight = 200 }: { chartHeight?: number }) {
             : 'bg-gray-800 border-gray-700'
         }`}>
           <div className="text-gray-500">{formatTimeLabel(hoveredPoint.timestamp, rangeMins, showUtc)}</div>
-          <div>Read: <span className="text-blue-400 font-medium">{formatNumber(hoveredPoint.readIops)}</span></div>
-          <div>Write: <span className="text-amber-400 font-medium">{formatNumber(hoveredPoint.writeIops)}</span></div>
-          <div>Total: <span className="text-white font-medium">{formatNumber(hoveredPoint.totalIops)}</span></div>
-          {hasSecondary && (
-            <>
-              <div>Queue: <span className="text-green-400 font-medium">{hoveredPoint.diskQueueDepth.toFixed(1)}</span></div>
-              <div>Latency: <span className="text-purple-400 font-medium">{hoveredPoint.readLatencyMs.toFixed(2)}ms</span></div>
-            </>
+          {isVisible('read') && <div>Read: <span className="text-blue-400 font-medium">{formatNumber(hoveredPoint.readIops)}</span></div>}
+          {isVisible('write') && <div>Write: <span className="text-amber-400 font-medium">{formatNumber(hoveredPoint.writeIops)}</span></div>}
+          {isVisible('total') && <div>Total: <span className="text-white font-medium">{formatNumber(hoveredPoint.totalIops)}</span></div>}
+          {hasSecondaryData && isVisible('queue') && (
+            <div>Queue: <span className="text-green-400 font-medium">{hoveredPoint.diskQueueDepth.toFixed(1)}</span></div>
           )}
-          {iopsThreshold > 0 && hoveredPoint.totalIops > iopsThreshold && (
+          {hasSecondaryData && isVisible('latency') && (
+            <div>Latency: <span className="text-purple-400 font-medium">{hoveredPoint.readLatencyMs.toFixed(2)}ms</span></div>
+          )}
+          {isVisible('threshold') && iopsThreshold > 0 && hoveredPoint.totalIops > iopsThreshold && (
             <div className="text-red-400 font-bold">BREACH ({((hoveredPoint.totalIops / iopsThreshold) * 100).toFixed(0)}% of limit)</div>
           )}
         </div>
